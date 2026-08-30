@@ -1,0 +1,45 @@
+"""Search constants and precomputed tables.
+
+Values follow Ethereal and Berserk where those engines publish them; anything
+marked "tune" is a starting point to be measured by self-play, not a result.
+"""
+import math
+
+import numpy as np
+import numpy.typing as npt
+
+MAX_PLY = 128
+MATE = 30000
+#: Scores at or beyond this are mate scores and need ply adjustment in the TT.
+MATE_IN_MAX = MATE - MAX_PLY
+INF = 1 << 20
+
+TT_BITS = 22                      # 4.2M entries ~= 75 MB, well inside 2 GB
+TT_SIZE = 1 << TT_BITS
+TT_MASK = TT_SIZE - 1
+BOUND_NONE, BOUND_LOWER, BOUND_UPPER, BOUND_EXACT = 0, 1, 2, 3
+
+#: Draws are scored slightly against us so that a winning engine does not accept
+#: a repetition. Small on purpose - the 1990s cautionary cases are engines that
+#: refused a saving repetition and lost outright. Decayed when not winning.
+CONTEMPT = 30
+
+RFP_MARGIN = 75                   # per ply of depth, reverse futility  (tune)
+RFP_MAX_DEPTH = 8
+NMP_MIN_DEPTH = 3
+LMP_MAX_DEPTH = 8
+ASPIRATION_DELTA = 25
+
+#: LMR[depth][move_number]. Berserk's formula: 0.7844 + ln(d)*ln(m)/2.4696.
+LMR: npt.NDArray[np.int8] = np.zeros((64, 64), dtype=np.int8)
+for _d in range(1, 64):
+    for _m in range(1, 64):
+        LMR[_d, _m] = int(0.7844 + math.log(_d) * math.log(_m) / 2.4696)
+
+#: LMP[improving][depth] - how many quiet moves to try before pruning the rest.
+LMP: npt.NDArray[np.int16] = np.zeros((2, LMP_MAX_DEPTH + 1), dtype=np.int16)
+for _d in range(LMP_MAX_DEPTH + 1):
+    LMP[0, _d] = int((3 + _d * _d) / 2)
+    LMP[1, _d] = int(3 + _d * _d)
+
+HISTORY_MAX = 16384
