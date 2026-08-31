@@ -10,7 +10,7 @@ import ctypes
 import numpy as np
 import numpy.typing as npt
 from numba import njit
-from numba.types import int64
+from numba.core.types import int64
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 _clock_gettime = _libc.clock_gettime
@@ -28,7 +28,7 @@ def new_timebuf() -> npt.NDArray[np.int64]:
 @njit(int64(int64[::1]), cache=False, nogil=True)
 def now_ns(buf: npt.NDArray[np.int64]) -> int:
     _clock_gettime(CLOCK_MONOTONIC, buf.ctypes.data)
-    return buf[0] * 1_000_000_000 + buf[1]
+    return int(buf[0]) * 1_000_000_000 + int(buf[1])
 
 
 def available() -> bool:

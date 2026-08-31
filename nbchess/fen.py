@@ -1,5 +1,6 @@
 """FEN <-> internal state, and a perft driver for correctness testing."""
 import numpy as np
+import numpy.typing as npt
 
 from .core import gen_moves, make, perft
 from .zobrist import CASTLE_KEY, EP_KEY, PIECE_KEY, SIDE_KEY
@@ -10,13 +11,14 @@ PIECE_CHARS = "PNBRQKpnbrqk"
 MAXPLY = 128
 
 
-def new_stack(maxply=MAXPLY):
+def new_stack(maxply: int = MAXPLY) -> tuple[
+        npt.NDArray[np.uint64], npt.NDArray[np.int8], npt.NDArray[np.uint32]]:
     return (np.zeros((maxply, 19), dtype=U),
             np.full((maxply, 64), EMPTY, dtype=np.int8),
             np.zeros((maxply, 256), dtype=np.uint32))
 
 
-def set_fen(s, mb, fen):
+def set_fen(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8], fen: str) -> None:
     s[:] = 0
     mb[:] = EMPTY
     parts = fen.split()
@@ -49,7 +51,7 @@ def set_fen(s, mb, fen):
     s[18] = zobrist(s, mb)
 
 
-def zobrist(s, mb):
+def zobrist(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.uint64:
     """Compute a position hash from scratch. Only used when setting a FEN;
     every other position gets its hash incrementally from make()."""
     h = U(0)
@@ -62,16 +64,16 @@ def zobrist(s, mb):
         h ^= EP_KEY[int(s[16]) & 7]
     if int(s[14]) == 1:
         h ^= SIDE_KEY
-    return h
+    return np.uint64(h)
 
 
-def run_perft(fen, depth):
+def run_perft(fen: str, depth: int) -> int:
     st, mbs, buf = new_stack()
     set_fen(st[0], mbs[0], fen)
     return perft(st, mbs, buf, 0, depth)
 
 
-def perft_divide(fen, depth):
+def perft_divide(fen: str, depth: int) -> dict[str, int]:
     """Per-root-move counts, for pinpointing exactly where a bug lives."""
     st, mbs, buf = new_stack()
     set_fen(st[0], mbs[0], fen)

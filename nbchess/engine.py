@@ -18,6 +18,7 @@ from .fen import new_stack, set_fen
 from .search import (
     C_CONTEMPT,
     C_DEADLINE,
+    C_GAMEPLY,
     C_NODECAP,
     C_NODES,
     C_REPBASE,
@@ -118,7 +119,8 @@ class Engine:
         return n
 
     def think(self, fen: str, budget_ms: float, hard_ms: float,
-              history: tuple[str, ...] = (), max_depth: int = MAX_PLY - 8,
+              history: tuple[str, ...] = (), game_ply: int = 0,
+              max_depth: int = MAX_PLY - 8,
               ) -> list[tuple[str, int]]:
         """Search `fen` and return (uci, score) pairs, best first."""
         started = time.perf_counter()
@@ -131,6 +133,7 @@ class Engine:
         self.ctl[C_STOPPED] = 0
         self.ctl[C_REPBASE] = base
         self.ctl[C_CONTEMPT] = CONTEMPT
+        self.ctl[C_GAMEPLY] = game_ply
         self.ctl[C_DEADLINE] = now_ns(self.tbuf) + int(hard_ms * 1_000_000)
         self.ctl[C_NODECAP] = max(4096, int(self.nps * hard_ms / 1000.0 * 2.0))
 

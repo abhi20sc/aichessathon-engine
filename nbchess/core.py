@@ -19,8 +19,9 @@ Move encoding, uint32:
     bits 15-17 flag (0 quiet, 1 en-passant, 2 castle, 3 double push)
 """
 import numpy as np
+import numpy.typing as npt
 from numba import njit
-from numba.types import boolean, int8, int64, uint32, uint64
+from numba.core.types import boolean, int8, int64, uint32, uint64
 
 from .tables import (
     BISHOP_MAGIC_A,
@@ -46,42 +47,41 @@ U = np.uint64
 EMPTY = 12
 NONE_SQ = U(64)
 
-_k = dict(cache=False, fastmath=False, nogil=True)
 
 
-@njit(uint64(uint64), inline='always', **_k)
-def lsb(b):
+@njit(uint64(uint64), forceinline=True, cache=False, nogil=True)
+def lsb(b: np.uint64) -> np.uint64:
     """Index of the least significant set bit (de Bruijn multiplication)."""
-    return uint64(DEBRUIJN_IDX[(((b & (uint64(0) - b)) * DEBRUIJN) >> uint64(58))])
+    return np.uint64(DEBRUIJN_IDX[(((b & (uint64(0) - b)) * DEBRUIJN) >> uint64(58))])
 
 
-@njit(uint64(uint64), inline='always', **_k)
-def popcount(b):
+@njit(uint64(uint64), forceinline=True, cache=False, nogil=True)
+def popcount(b: np.uint64) -> np.uint64:
     b = b - ((b >> uint64(1)) & uint64(0x5555555555555555))
     b = (b & uint64(0x3333333333333333)) + ((b >> uint64(2)) & uint64(0x3333333333333333))
     b = (b + (b >> uint64(4))) & uint64(0x0F0F0F0F0F0F0F0F)
     return (b * uint64(0x0101010101010101)) >> uint64(56)
 
 
-@njit(uint64(uint64, uint64), inline='always', **_k)
-def rook_att(sq, occ):
+@njit(uint64(uint64, uint64), cache=False, nogil=True)
+def rook_att(sq: np.uint64, occ: np.uint64) -> np.uint64:
     i = ((occ & ROOK_MASK[sq]) * ROOK_MAGIC_A[sq]) >> ROOK_SHIFT[sq]
-    return ROOK_TABLE[ROOK_OFF[sq] + i]
+    return np.uint64(ROOK_TABLE[ROOK_OFF[sq] + i])
 
 
-@njit(uint64(uint64, uint64), inline='always', **_k)
-def bishop_att(sq, occ):
+@njit(uint64(uint64, uint64), cache=False, nogil=True)
+def bishop_att(sq: np.uint64, occ: np.uint64) -> np.uint64:
     i = ((occ & BISHOP_MASK[sq]) * BISHOP_MAGIC_A[sq]) >> BISHOP_SHIFT[sq]
-    return BISHOP_TABLE[BISHOP_OFF[sq] + i]
+    return np.uint64(BISHOP_TABLE[BISHOP_OFF[sq] + i])
 
 
-@njit(uint64(uint64, uint64), inline='always', **_k)
-def queen_att(sq, occ):
+@njit(uint64(uint64, uint64), cache=False, nogil=True)
+def queen_att(sq: np.uint64, occ: np.uint64) -> np.uint64:
     return rook_att(sq, occ) | bishop_att(sq, occ)
 
 
-@njit(boolean(uint64[:], uint64, uint64), **_k)
-def attacked(s, sq, by):
+@njit(boolean(uint64[:], uint64, uint64), cache=False, nogil=True)
+def attacked(s: npt.NDArray[np.uint64], sq: np.uint64, by: np.uint64) -> bool:
     """Is `sq` attacked by side `by` in state row `s`?"""
     off = by * uint64(6)
     occ = s[12] | s[13]
@@ -96,13 +96,17 @@ def attacked(s, sq, by):
     return bool(rook_att(sq, occ) & (s[off + uint64(3)] | s[off + uint64(4)]))
 
 
-@njit(uint32(uint64, uint64, uint64, uint64), inline='always', **_k)
-def mk(frm, to, promo, flag):
+@njit(uint32(uint64, uint64, uint64, uint64), forceinline=True, cache=False, nogil=True)
+def mk(frm: np.uint64, to: np.uint64, promo: np.uint64, flag: np.uint64) -> np.uint32:
     return uint32(frm | (to << uint64(6)) | (promo << uint64(12)) | (flag << uint64(15)))
 
 
-@njit(int64(uint64[:], int8[:], uint32[:]), **_k)
-def gen_moves(s, mb, out):
+@njit(int64(uint64[:], int8[:], uint32[:]), cache=False, nogil=True)
+def gen_moves(
+        s: npt.NDArray[np.uint64],
+        mb: npt.NDArray[np.int8],
+        out: npt.NDArray[np.uint32],
+) -> int:
     """Generate pseudo-legal moves into `out`, return how many."""
     n = 0
     us = s[14]
@@ -128,100 +132,144 @@ def gen_moves(s, mb, out):
 
     b = one
     while b:
-        to = lsb(b); b &= b - uint64(1)
+        to = lsb(b)
+        b &= b - uint64(1)
         frm = to - uint64(8) if us == uint64(0) else to + uint64(8)
         if (uint64(1) << to) & rank8:
-            out[n] = mk(frm, to, uint64(4), uint64(0)); n += 1
-            out[n] = mk(frm, to, uint64(3), uint64(0)); n += 1
-            out[n] = mk(frm, to, uint64(2), uint64(0)); n += 1
-            out[n] = mk(frm, to, uint64(1), uint64(0)); n += 1
+            out[n] = mk(frm, to, uint64(4), uint64(0))
+            n += 1
+            out[n] = mk(frm, to, uint64(3), uint64(0))
+            n += 1
+            out[n] = mk(frm, to, uint64(2), uint64(0))
+            n += 1
+            out[n] = mk(frm, to, uint64(1), uint64(0))
+            n += 1
         else:
-            out[n] = mk(frm, to, uint64(0), uint64(0)); n += 1
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
     b = two
     while b:
-        to = lsb(b); b &= b - uint64(1)
+        to = lsb(b)
+        b &= b - uint64(1)
         frm = to - uint64(16) if us == uint64(0) else to + uint64(16)
-        out[n] = mk(frm, to, uint64(0), uint64(3)); n += 1
+        out[n] = mk(frm, to, uint64(0), uint64(3))
+        n += 1
 
     ep = s[16]
     cap_targets = opp
     b = pawns
     while b:
-        frm = lsb(b); b &= b - uint64(1)
+        frm = lsb(b)
+        b &= b - uint64(1)
         a = PAWN_ATT[us, frm] & cap_targets
         while a:
-            to = lsb(a); a &= a - uint64(1)
+            to = lsb(a)
+            a &= a - uint64(1)
             if (uint64(1) << to) & rank8:
-                out[n] = mk(frm, to, uint64(4), uint64(0)); n += 1
-                out[n] = mk(frm, to, uint64(3), uint64(0)); n += 1
-                out[n] = mk(frm, to, uint64(2), uint64(0)); n += 1
-                out[n] = mk(frm, to, uint64(1), uint64(0)); n += 1
+                out[n] = mk(frm, to, uint64(4), uint64(0))
+                n += 1
+                out[n] = mk(frm, to, uint64(3), uint64(0))
+                n += 1
+                out[n] = mk(frm, to, uint64(2), uint64(0))
+                n += 1
+                out[n] = mk(frm, to, uint64(1), uint64(0))
+                n += 1
             else:
-                out[n] = mk(frm, to, uint64(0), uint64(0)); n += 1
+                out[n] = mk(frm, to, uint64(0), uint64(0))
+                n += 1
         if ep != NONE_SQ and (PAWN_ATT[us, frm] & (uint64(1) << ep)):
-            out[n] = mk(frm, ep, uint64(0), uint64(1)); n += 1
+            out[n] = mk(frm, ep, uint64(0), uint64(1))
+            n += 1
 
     # ---- knights ----
     b = s[off + uint64(1)]
     while b:
-        frm = lsb(b); b &= b - uint64(1)
+        frm = lsb(b)
+        b &= b - uint64(1)
         a = KNIGHT_ATT[frm] & ~own
         while a:
-            to = lsb(a); a &= a - uint64(1)
-            out[n] = mk(frm, to, uint64(0), uint64(0)); n += 1
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
 
     # ---- bishops / rooks / queens ----
     b = s[off + uint64(2)]
     while b:
-        frm = lsb(b); b &= b - uint64(1)
+        frm = lsb(b)
+        b &= b - uint64(1)
         a = bishop_att(frm, occ) & ~own
         while a:
-            to = lsb(a); a &= a - uint64(1)
-            out[n] = mk(frm, to, uint64(0), uint64(0)); n += 1
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
     b = s[off + uint64(3)]
     while b:
-        frm = lsb(b); b &= b - uint64(1)
+        frm = lsb(b)
+        b &= b - uint64(1)
         a = rook_att(frm, occ) & ~own
         while a:
-            to = lsb(a); a &= a - uint64(1)
-            out[n] = mk(frm, to, uint64(0), uint64(0)); n += 1
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
     b = s[off + uint64(4)]
     while b:
-        frm = lsb(b); b &= b - uint64(1)
+        frm = lsb(b)
+        b &= b - uint64(1)
         a = queen_att(frm, occ) & ~own
         while a:
-            to = lsb(a); a &= a - uint64(1)
-            out[n] = mk(frm, to, uint64(0), uint64(0)); n += 1
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
 
     # ---- king ----
     b = s[off + uint64(5)]
     ksq = lsb(b)
     a = KING_ATT[ksq] & ~own
     while a:
-        to = lsb(a); a &= a - uint64(1)
-        out[n] = mk(ksq, to, uint64(0), uint64(0)); n += 1
+        to = lsb(a)
+        a &= a - uint64(1)
+        out[n] = mk(ksq, to, uint64(0), uint64(0))
+        n += 1
 
     # ---- castling ----
+    # Castling. The rights-and-empty-squares test is cheap and comes first so
+    # that the two attack probes only run when the castle is otherwise possible.
     cr = s[15]
     if us == uint64(0):
-        if (cr & uint64(1)) and not (occ & uint64(0x60)):
-            if not attacked(s, uint64(4), them) and not attacked(s, uint64(5), them):
-                out[n] = mk(uint64(4), uint64(6), uint64(0), uint64(2)); n += 1
-        if (cr & uint64(2)) and not (occ & uint64(0x0E)):
-            if not attacked(s, uint64(4), them) and not attacked(s, uint64(3), them):
-                out[n] = mk(uint64(4), uint64(2), uint64(0), uint64(2)); n += 1
+        ks_open = (cr & uint64(1)) != uint64(0) and (occ & uint64(0x60)) == uint64(0)
+        if ks_open and not attacked(s, uint64(4), them) and not attacked(s, uint64(5), them):
+            out[n] = mk(uint64(4), uint64(6), uint64(0), uint64(2))
+            n += 1
+        qs_open = (cr & uint64(2)) != uint64(0) and (occ & uint64(0x0E)) == uint64(0)
+        if qs_open and not attacked(s, uint64(4), them) and not attacked(s, uint64(3), them):
+            out[n] = mk(uint64(4), uint64(2), uint64(0), uint64(2))
+            n += 1
     else:
-        if (cr & uint64(4)) and not (occ & uint64(0x6000000000000000)):
-            if not attacked(s, uint64(60), them) and not attacked(s, uint64(61), them):
-                out[n] = mk(uint64(60), uint64(62), uint64(0), uint64(2)); n += 1
-        if (cr & uint64(8)) and not (occ & uint64(0x0E00000000000000)):
-            if not attacked(s, uint64(60), them) and not attacked(s, uint64(59), them):
-                out[n] = mk(uint64(60), uint64(58), uint64(0), uint64(2)); n += 1
+        ks_open = ((cr & uint64(4)) != uint64(0)
+                   and (occ & uint64(0x6000000000000000)) == uint64(0))
+        if ks_open and not attacked(s, uint64(60), them) and not attacked(s, uint64(61), them):
+            out[n] = mk(uint64(60), uint64(62), uint64(0), uint64(2))
+            n += 1
+        qs_open = ((cr & uint64(8)) != uint64(0)
+                   and (occ & uint64(0x0E00000000000000)) == uint64(0))
+        if qs_open and not attacked(s, uint64(60), them) and not attacked(s, uint64(59), them):
+            out[n] = mk(uint64(60), uint64(58), uint64(0), uint64(2))
+            n += 1
     return n
 
 
-@njit(boolean(uint64[:], int8[:], uint64[:], int8[:], uint32), **_k)
-def make(s, mb, ns, nmb, mv):
+@njit(boolean(uint64[:], int8[:], uint64[:], int8[:], uint32), cache=False, nogil=True)
+def make(
+        s: npt.NDArray[np.uint64],
+        mb: npt.NDArray[np.int8],
+        ns: npt.NDArray[np.uint64],
+        nmb: npt.NDArray[np.int8],
+        mv: np.uint32,
+) -> bool:
     """Apply `mv` to state (s, mb), writing the result into (ns, nmb).
 
     Maintains the Zobrist hash incrementally in slot 18. Returns False if the
@@ -316,8 +364,13 @@ def make(s, mb, ns, nmb, mv):
     return not attacked(ns, ksq, them)
 
 
-@njit(boolean(uint64[:], int8[:], uint64[:], int8[:]), **_k)
-def make_null(s, mb, ns, nmb):
+@njit(boolean(uint64[:], int8[:], uint64[:], int8[:]), cache=False, nogil=True)
+def make_null(
+        s: npt.NDArray[np.uint64],
+        mb: npt.NDArray[np.int8],
+        ns: npt.NDArray[np.uint64],
+        nmb: npt.NDArray[np.int8],
+) -> bool:
     """Pass the move to the opponent. Used by null-move pruning."""
     for i in range(19):
         ns[i] = s[i]
@@ -333,8 +386,16 @@ def make_null(s, mb, ns, nmb):
     return True
 
 
-@njit(int64(uint64[:, :], int8[:, :], uint32[:, :], int64, int64), **_k)
-def perft(stack, mbs, buf, ply, depth):
+# Lazily compiled: perft is a correctness test, not a match-time kernel, so it
+# should not spend any of the 60 second initialisation budget.
+@njit(cache=False, nogil=True)
+def perft(
+        stack: npt.NDArray[np.uint64],
+        mbs: npt.NDArray[np.int8],
+        buf: npt.NDArray[np.uint32],
+        ply: int,
+        depth: int,
+) -> int:
     if depth == 0:
         return 1
     n = gen_moves(stack[ply], mbs[ply], buf[ply])

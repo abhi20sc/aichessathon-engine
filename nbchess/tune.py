@@ -43,3 +43,20 @@ for _d in range(LMP_MAX_DEPTH + 1):
     LMP[1, _d] = int(3 + _d * _d)
 
 HISTORY_MAX = 16384
+
+#: The referee stops the game at this many plies and awards it on raw material,
+#: using its own scale - not on our evaluation.
+PLY_CAP = 300
+#: Over the last this many plies before the cap, the evaluation is blended
+#: toward that raw material count, because that is what the game will actually
+#: be scored on. A crushing attack is worth nothing to an adjudicator.
+ADJUDICATION_BLEND = 80
+#: Score returned for a position that reaches the cap materially ahead. Well
+#: above any positional evaluation, well below a real mate.
+ADJUDICATION_WIN = 20000
+#: Referee's piece values, in centipawns, on its scale: P1 N3 B3 R5 Q9.
+#: An array rather than a tuple so the search can index it with a loop variable.
+REF_VALUES: npt.NDArray[np.int32] = np.array([100, 300, 300, 500, 900, 0], dtype=np.int32)
+#: Above this halfmove clock the advantage is scaled down, because the position
+#: is genuinely closer to a draw and converting sooner is worth more.
+FIFTY_MOVE_SCALE_FROM = 20

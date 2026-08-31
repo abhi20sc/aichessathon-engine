@@ -20,6 +20,10 @@ import time  # noqa: E402
 
 import chess  # noqa: E402
 
+#: Set NBCHESS_DEBUG=1 to trace clock usage per move. Off in rated games; the
+#: runner discards our output there anyway, but printing still costs wall time.
+_DEBUG = os.environ.get("NBCHESS_DEBUG") == "1"
+
 #: The referee starts its stopwatch before the request reaches us and stops it
 #: after our reply is parsed, so transport is charged to our clock. Measured
 #: per move and smoothed, starting from a conservative guess.
@@ -161,7 +165,8 @@ def get_move(fen: str, time_left_ms: int) -> str:
             tracked = _tracker.sync(fen)
             history = GameTracker.history_fens(tracked)
             soft, hard = allocate(float(time_left_ms), INCREMENT_MS, _overhead_ms)
-            ranked = _engine.think(fen, budget_ms=soft, hard_ms=hard, history=history)
+            ranked = _engine.think(fen, budget_ms=soft, hard_ms=hard, history=history,
+                                   game_ply=board.ply())
             candidate = _choose(tracked, ranked)
             if candidate in legal:
                 chosen = candidate
@@ -182,6 +187,10 @@ def get_move(fen: str, time_left_ms: int) -> str:
 
     # Learn how much wall time we lose outside the search itself.
     spent_ms = (time.perf_counter() - entered) * 1000.0
+    if _DEBUG:
+        depth = getattr(_engine, "depth_reached", 0)
+        print(f"ply={board.ply():3d} left={time_left_ms:7d}ms spent={spent_ms:7.0f}ms "
+              f"depth={depth:2d} move={chosen}")
     if _engine is not None:
         slack = spent_ms - getattr(_engine, "last_search_ms", spent_ms)
         if 0.0 <= slack < 2000.0:

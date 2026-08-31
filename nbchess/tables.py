@@ -12,7 +12,8 @@ ROOK_DIRS   = ((1, 0), (-1, 0), (0, 1), (0, -1))
 BISHOP_DIRS = ((1, 1), (1, -1), (-1, 1), (-1, -1))
 
 
-def _slide(sq, dirs, occ, stop_before_edge=False):
+def _slide(sq: int, dirs: tuple[tuple[int, int], ...], occ: int,
+           stop_before_edge: bool = False) -> int:
     f, r = sq % 8, sq // 8
     att = 0
     for df, dr in dirs:
@@ -23,11 +24,12 @@ def _slide(sq, dirs, occ, stop_before_edge=False):
             att |= 1 << (nr * 8 + nf)
             if occ & (1 << (nr * 8 + nf)):
                 break
-            nf += df; nr += dr
+            nf += df
+            nr += dr
     return att
 
 
-def _subsets(m):
+def _subsets(m: int) -> list[int]:
     out, s = [], 0
     while True:
         out.append(s)
@@ -36,7 +38,7 @@ def _subsets(m):
             return out
 
 
-def _leaper(sq, deltas):
+def _leaper(sq: int, deltas: tuple[tuple[int, int], ...]) -> int:
     f, r = sq % 8, sq // 8
     att = 0
     for df, dr in deltas:
@@ -70,11 +72,13 @@ ROOK_OFF   = np.zeros(64, dtype=U)
 BISHOP_OFF = np.zeros(64, dtype=U)
 _o = 0
 for s in range(64):
-    ROOK_OFF[s] = _o; _o += 1 << ROOK_BITS[s]
+    ROOK_OFF[s] = _o
+    _o += 1 << ROOK_BITS[s]
 ROOK_TABLE = np.zeros(_o, dtype=U)
 _o = 0
 for s in range(64):
-    BISHOP_OFF[s] = _o; _o += 1 << BISHOP_BITS[s]
+    BISHOP_OFF[s] = _o
+    _o += 1 << BISHOP_BITS[s]
 BISHOP_TABLE = np.zeros(_o, dtype=U)
 
 for s in range(64):

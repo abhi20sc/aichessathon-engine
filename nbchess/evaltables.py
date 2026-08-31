@@ -1,5 +1,6 @@
 """Piece-square tables, written a8..h1 for readability then flipped to a1..h8."""
 import numpy as np
+import numpy.typing as npt
 
 MATERIAL = np.array([100, 320, 330, 500, 900, 0], dtype=np.int32)
 
@@ -59,7 +60,7 @@ _KING_MG = [
     20, 30, 10,  0,  0, 10, 30, 20]
 
 
-def _flip(t):
+def _flip(t: list[int]) -> npt.NDArray[np.int32]:
     """a8..h1 reading order -> a1..h8 square indexing."""
     out = np.zeros(64, dtype=np.int32)
     for i, v in enumerate(t):
