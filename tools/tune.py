@@ -74,20 +74,49 @@ def loss(states, mbs, results, w, k):
     return total / n
 
 
-def load(path: Path) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.int8],
-                              npt.NDArray[np.float64]]:
-    fens, res = [], []
+#: Weight on the engine's evaluation versus the game result. Stockfish trains
+#: its own networks at 0.7 and the value is not delicate; the point is that the
+#: evaluation carries a distinct label per position where the result does not.
+LAMBDA = 0.7
+
+
+def load(path: Path, k: float) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.int8],
+                                        npt.NDArray[np.float64], npt.NDArray[np.int64]]:
+    """Read `fen|result[|engine_cp]` rows.
+
+    Returns the positions, a blended target, and a game id per row. The game id
+    matters: positions from one game share a result, so a holdout split that
+    cuts through a game leaks and flatters itself. Games are detected by the
+    move counter resetting, since each game is written contiguously.
+    """
+    fens: list[str] = []
+    targets: list[float] = []
+    games: list[int] = []
+    game = 0
+    last_ply = 10**9
     for line in path.read_text().splitlines():
-        if "|" not in line:
+        parts = line.split("|")
+        if len(parts) < 2:
             continue
-        fen, score = line.rsplit("|", 1)
+        fen, result = parts[0], float(parts[1])
+        ply = int(fen.split()[-1])
+        if ply < last_ply:
+            game += 1
+        last_ply = ply
+        if len(parts) >= 3:
+            cp = float(parts[2])
+            wdl = 1.0 / (1.0 + 10.0 ** (-k * cp / 400.0))
+            targets.append(LAMBDA * wdl + (1.0 - LAMBDA) * result)
+        else:
+            targets.append(result)
         fens.append(fen)
-        res.append(float(score))
+        games.append(game)
     states = np.zeros((len(fens), 19), dtype=np.uint64)
     mbs = np.full((len(fens), 64), 12, dtype=np.int8)
     for i, fen in enumerate(fens):
         set_fen(states[i], mbs[i], fen)
-    return states, mbs, np.array(res, dtype=np.float64)
+    return (states, mbs, np.array(targets, dtype=np.float64),
+            np.array(games, dtype=np.int64))
 
 
 #: Curves are tuned by scale and offset rather than entry by entry.
@@ -133,16 +162,22 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=Path("tuned.txt"))
     args = ap.parse_args()
 
-    states, mbs, results = load(args.data)
-    print(f"{states.shape[0]:,} positions loaded")
+    # K is needed to convert engine centipawns into the target, and again to
+    # squash our own evaluation. Fit it once against a plain-result target, then
+    # reuse it, so the two sides of the comparison share a scale.
+    states, mbs, results, games = load(args.data, 1.0)
+    n_games = int(games.max())
+    print(f"{states.shape[0]:,} positions from {n_games:,} games "
+          f"({states.shape[0] / max(n_games, 1):.0f} per game)")
 
     # Hold a fifth of the data back. Tuning that only improves the training
     # error is overfitting, and the holdout is how you see it.
-    n = states.shape[0]
-    cut = (n * 4) // 5
-    tr = (states[:cut], mbs[:cut], results[:cut])
-    va = (states[cut:], mbs[cut:], results[cut:])
-    print(f"train {cut:,}   holdout {n - cut:,}")
+    holdout_from = int(n_games * 0.8)
+    mask = games <= holdout_from
+    tr = (states[mask], mbs[mask], results[mask])
+    va = (states[~mask], mbs[~mask], results[~mask])
+    print(f"train {tr[0].shape[0]:,} positions / {holdout_from:,} games   "
+          f"holdout {va[0].shape[0]:,} / {n_games - holdout_from:,} games")
 
     theta = [100, 0] * len(CURVES) + [int(WEIGHTS[i]) for _n, i in SCALARS]
     w = build(theta)
