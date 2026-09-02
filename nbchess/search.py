@@ -22,11 +22,60 @@ The clock is a real deadline polled every 2048 nodes, not a node estimate.
 import numpy as np
 import numpy.typing as npt
 from numba import njit
-from numba.core.types import boolean, int8, int16, int32, int64, uint8, uint32, uint64
+from numba.core.types import (
+    Array,
+    boolean,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint32,
+    uint64,
+)
 
 from .clock import now_ns
-from .core import attacked, gen_moves, lsb, make, make_null, popcount
-from .evaltables import FLIP_SQ, MATERIAL, PST
+from .core import (
+    attacked,
+    bishop_att,
+    gen_moves,
+    lsb,
+    make,
+    make_null,
+    popcount,
+    queen_att,
+    rook_att,
+)
+from .evaltables import MATERIAL
+from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
+from .tables import KNIGHT_ATT
+from .terms import (
+    ADJACENT_FILES,
+    FRONT_MASK,
+    I_BI_EG,
+    I_BI_MG,
+    I_BP_EG,
+    I_BP_MG,
+    I_DBL_EG,
+    I_DBL_MG,
+    I_ISO_EG,
+    I_ISO_MG,
+    I_KN_EG,
+    I_KN_MG,
+    I_KS,
+    I_PA_EG,
+    I_PA_MG,
+    I_QU_EG,
+    I_QU_MG,
+    I_RK_EG,
+    I_RK_MG,
+    KING_ZONE,
+    KS_ATTACKERS,
+    KS_TABLE,
+    KS_WEIGHT,
+    PASSED_MASK,
+    WEIGHTS,
+)
 from .tune import (
     ADJUDICATION_BLEND,
     ADJUDICATION_WIN,
@@ -49,24 +98,170 @@ from .tune import (
     TT_MASK,
 )
 
+#: A global numpy array reaches a jitted function as a readonly array, so the
+#: parameterised evaluation is compiled for both that and a writable one - the
+#: shipped path passes the frozen global, the tuner passes a working copy.
+_W_RO = Array(int32, 1, "C", readonly=True)  # type: ignore[no-untyped-call]
+_W_RW = Array(int32, 1, "C")  # type: ignore[no-untyped-call]
+
 # ctl slots, so the search can report back without returning tuples
 C_NODES, C_DEADLINE, C_STOPPED, C_REPBASE, C_NODECAP, C_CONTEMPT = 0, 1, 2, 3, 4, 5
 C_GAMEPLY = 6
 
 
+FILE_A = uint64(0x0101010101010101)
+FILE_H = uint64(0x8080808080808080)
+
+
+@njit([int32(uint64[:], int8[:], _W_RO), int32(uint64[:], int8[:], _W_RW)],
+      cache=False, nogil=True)
+def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
+               w: npt.NDArray[np.int32]) -> np.int32:
+    """Tapered evaluation: material and piece-square tables, plus mobility,
+    pawn structure, king safety and the bishop pair.
+
+    Two scores are accumulated - one weighted for the middlegame, one for the
+    endgame - and interpolated by how much material remains. That interpolation
+    is the point: a king belongs behind its pawns at move ten and in the centre
+    at move sixty, and one table cannot say both.
+
+    Returned from the side to move's point of view.
+    """
+    mg = int32(0)
+    eg = int32(0)
+    phase = int32(0)
+    occ = s[12] | s[13]
+    wp = s[0]
+    bp = s[6]
+
+    # Squares each side's pawns attack. Mobility that walks into a pawn is not
+    # mobility, so these are excluded from the safe-square counts below.
+    wp_att = ((wp & ~FILE_A) << uint64(7)) | ((wp & ~FILE_H) << uint64(9))
+    bp_att = ((bp & ~FILE_A) >> uint64(9)) | ((bp & ~FILE_H) >> uint64(7))
+
+    # ---- material and piece-square ----
+    for pt in range(6):
+        b = s[pt]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            mg += MG_W[pt, sq]
+            eg += EG_W[pt, sq]
+            phase += PHASE[pt]
+        b = s[uint64(6) + uint64(pt)]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            mg -= MG_B[pt, sq]
+            eg -= EG_B[pt, sq]
+            phase += PHASE[pt]
+
+    # ---- mobility, counted on squares not attacked by an enemy pawn ----
+    for side in range(2):
+        off = uint64(side) * uint64(6)
+        own = s[12 + uint64(side)]
+        bad = bp_att if side == 0 else wp_att
+        sign = int32(1) if side == 0 else int32(-1)
+
+        b = s[off + uint64(1)]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            c = popcount(KNIGHT_ATT[sq] & ~own & ~bad)
+            mg += sign * w[I_KN_MG + c]
+            eg += sign * w[I_KN_EG + c]
+        b = s[off + uint64(2)]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            c = popcount(bishop_att(sq, occ) & ~own & ~bad)
+            mg += sign * w[I_BI_MG + c]
+            eg += sign * w[I_BI_EG + c]
+        b = s[off + uint64(3)]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            c = popcount(rook_att(sq, occ) & ~own & ~bad)
+            mg += sign * w[I_RK_MG + c]
+            eg += sign * w[I_RK_EG + c]
+        b = s[off + uint64(4)]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            c = popcount(queen_att(sq, occ) & ~own & ~bad)
+            mg += sign * w[I_QU_MG + c]
+            eg += sign * w[I_QU_EG + c]
+
+        # ---- bishop pair ----
+        if popcount(s[off + uint64(2)]) >= uint64(2):
+            mg += sign * w[I_BP_MG]
+            eg += sign * w[I_BP_EG]
+
+    # ---- pawn structure ----
+    for side in range(2):
+        pawns = s[uint64(side) * uint64(6)]
+        theirs = bp if side == 0 else wp
+        sign = int32(1) if side == 0 else int32(-1)
+        b = pawns
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            f = sq & uint64(7)
+            rel = sq >> uint64(3) if side == 0 else uint64(7) - (sq >> uint64(3))
+            if (PASSED_MASK[side, sq] & theirs) == uint64(0):
+                mg += sign * w[I_PA_MG + rel]
+                eg += sign * w[I_PA_EG + rel]
+            if (ADJACENT_FILES[f] & pawns) == uint64(0):
+                mg += sign * w[I_ISO_MG]
+                eg += sign * w[I_ISO_EG]
+            if (FRONT_MASK[side, sq] & pawns) != uint64(0):
+                mg += sign * w[I_DBL_MG]
+                eg += sign * w[I_DBL_EG]
+
+    # ---- king safety, middlegame only ----
+    for side in range(2):
+        ksq = lsb(s[uint64(side) * uint64(6) + uint64(5)])
+        zone = KING_ZONE[side, ksq]
+        them = uint64(1) - uint64(side)
+        off = them * uint64(6)
+        units = int32(0)
+        attackers = int32(0)
+        for pt in range(1, 5):
+            b = s[off + uint64(pt)]
+            hits = int32(0)
+            while b:
+                sq = lsb(b)
+                b &= b - uint64(1)
+                if pt == 1:
+                    a = KNIGHT_ATT[sq]
+                elif pt == 2:
+                    a = bishop_att(sq, occ)
+                elif pt == 3:
+                    a = rook_att(sq, occ)
+                else:
+                    a = queen_att(sq, occ)
+                n = popcount(a & zone)
+                if n > uint64(0):
+                    hits += int32(n)
+                    attackers += int32(1)
+            units += KS_WEIGHT[pt] * hits
+        if attackers >= int32(2):
+            idx = (units * KS_ATTACKERS[min(attackers, int32(8))]) // int32(100)
+            if idx > int32(99):
+                idx = int32(99)
+            penalty = (KS_TABLE[idx] * w[I_KS]) // int32(100)
+            mg -= penalty if side == 0 else -penalty
+
+    if phase > int32(PHASE_MAX):
+        phase = int32(PHASE_MAX)
+    score = (mg * phase + eg * (int32(PHASE_MAX) - phase)) // int32(PHASE_MAX)
+    return score if s[14] == uint64(0) else -score
+
+
 @njit(int32(uint64[:], int8[:]), cache=False, nogil=True)
 def evaluate(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
-    """Material and piece-square, from the side to move's point of view."""
-    sc = int32(0)
-    for sq in range(64):
-        pc = mb[sq]
-        if pc == 12:
-            continue
-        if pc < 6:
-            sc += MATERIAL[pc] + PST[pc][sq]
-        else:
-            sc -= MATERIAL[pc - 6] + PST[pc - 6][FLIP_SQ[sq]]
-    return sc if s[14] == uint64(0) else -sc
+    """Evaluate with the shipped weights."""
+    return evaluate_w(s, mb, WEIGHTS)
 
 
 @njit(int32(uint64[:]), cache=False, nogil=True)
