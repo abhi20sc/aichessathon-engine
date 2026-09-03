@@ -22,9 +22,10 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 from numba import njit
-from numba.core.types import float64, int8, int32, uint64
+from numba.core.types import float64, int8, uint64
 
 from nbchess.fen import set_fen
+from nbchess.search import _W_RO as _W_RO_1D
 from nbchess.search import evaluate_w
 from nbchess.terms import (
     I_BI_EG,
@@ -54,7 +55,7 @@ from nbchess.terms import (
 )
 
 
-@njit(float64(uint64[:, :], int8[:, :], float64[:], int32[::1], float64),
+@njit(float64(uint64[:, :], int8[:, :], float64[:], _W_RO_1D, float64),
       cache=False, nogil=True)
 def loss(states, mbs, results, w, k):
     """Mean squared error between the sigmoid of the evaluation and the result.
@@ -144,7 +145,12 @@ SCALARS = [
 
 
 def build(theta: list[int]) -> npt.NDArray[np.int32]:
-    """Map the small tuned vector back onto the full weight array."""
+    """Map the small tuned vector back onto the full weight array.
+
+    Returned readonly, because the evaluation is compiled for exactly one array
+    signature and compiling a second copy of it for a writable array would cost
+    real time out of the 60 second initialisation budget.
+    """
     w = WEIGHTS.copy()
     for i, (_name, base, count) in enumerate(CURVES):
         scale, offset = theta[2 * i], theta[2 * i + 1]
@@ -152,6 +158,7 @@ def build(theta: list[int]) -> npt.NDArray[np.int32]:
             w[base + j] = np.int32(int(WEIGHTS[base + j]) * scale // 100 + offset)
     for i, (_name, idx) in enumerate(SCALARS):
         w[idx] = np.int32(theta[2 * len(CURVES) + i])
+    w.flags.writeable = False
     return w
 
 

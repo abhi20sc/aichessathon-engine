@@ -35,12 +35,21 @@ WINNING_MARGIN_CP = 80
 _engine = None
 _engine_error: str | None = None
 
+_started = time.perf_counter()
 try:
     from nbchess.engine import Engine, allocate
 
     _engine = Engine()          # compiles here, inside the 60 s init budget
 except Exception as exc:
     _engine_error = f"{type(exc).__name__}: {exc}"
+_init_seconds = time.perf_counter() - _started
+
+# The numba compile is the one thing we cannot measure on the competition
+# hardware from here, and an overrun past 60 s forfeits every game. This line is
+# discarded in rated games and shown in the validation log, so the first upload
+# tells us exactly how much headroom we really have.
+print(f"[init] {_init_seconds:.1f}s of the 60s budget; engine "
+      f"{'ok' if _engine is not None else _engine_error}")
 
 
 class GameTracker:
@@ -165,8 +174,12 @@ def get_move(fen: str, time_left_ms: int) -> str:
             tracked = _tracker.sync(fen)
             history = GameTracker.history_fens(tracked)
             soft, hard = allocate(float(time_left_ms), INCREMENT_MS, _overhead_ms)
+            # Plies since the game's OWN starting position, which the referee
+            # counts from zero. Rated games begin at a curated opening, so the
+            # FEN's move counter is not the game's ply count - a position from
+            # move seven reads as ply twelve when the referee says zero.
             ranked = _engine.think(fen, budget_ms=soft, hard_ms=hard, history=history,
-                                   game_ply=board.ply())
+                                   game_ply=len(tracked.move_stack))
             candidate = _choose(tracked, ranked)
             if candidate in legal:
                 chosen = candidate

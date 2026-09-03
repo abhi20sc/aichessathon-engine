@@ -98,11 +98,11 @@ from .tune import (
     TT_MASK,
 )
 
-#: A global numpy array reaches a jitted function as a readonly array, so the
-#: parameterised evaluation is compiled for both that and a writable one - the
-#: shipped path passes the frozen global, the tuner passes a working copy.
+#: A global numpy array reaches a jitted function as a readonly array. Only that
+#: one signature is compiled: the evaluation is the largest kernel here, and a
+#: second signature would compile the whole of it again for no benefit. Callers
+#: with a writable array (the tuner) mark it readonly first.
 _W_RO = Array(int32, 1, "C", readonly=True)  # type: ignore[no-untyped-call]
-_W_RW = Array(int32, 1, "C")  # type: ignore[no-untyped-call]
 
 # ctl slots, so the search can report back without returning tuples
 C_NODES, C_DEADLINE, C_STOPPED, C_REPBASE, C_NODECAP, C_CONTEMPT = 0, 1, 2, 3, 4, 5
@@ -113,8 +113,7 @@ FILE_A = uint64(0x0101010101010101)
 FILE_H = uint64(0x8080808080808080)
 
 
-@njit([int32(uint64[:], int8[:], _W_RO), int32(uint64[:], int8[:], _W_RW)],
-      cache=False, nogil=True)
+@njit(int32(uint64[:], int8[:], _W_RO), cache=False, nogil=True)
 def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
                w: npt.NDArray[np.int32]) -> np.int32:
     """Tapered evaluation: material and piece-square tables, plus mobility,
