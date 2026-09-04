@@ -69,7 +69,11 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float) -> tu
     pool = time_left_ms + increment_ms * (MOVES_TO_GO - 1) - overhead_ms * (2 + MOVES_TO_GO)
     soft = SOFT_FRACTION * max(pool, increment_ms)
     soft = max(soft, min(0.6 * increment_ms, 0.5 * usable))
-    hard = min(5.0 * soft, 0.75 * usable)
+    # The hard ceiling must survive a search that runs to it on consecutive
+    # moves with transport charged on top: never more than half of what is
+    # left, and always a second in hand.
+    hard = min(5.0 * soft, 0.5 * usable, usable - 1000.0)
+    hard = max(hard, min(0.5 * usable, 50.0))
     soft = min(soft, hard)
     return soft, hard
 
@@ -174,6 +178,7 @@ class Engine:
                 alpha = np.int32(max(-INF, score - delta))
                 beta = np.int32(min(INF, score + delta))
 
+            fails = 0
             while True:
                 count = search_root(
                     self.stack, self.mbs, self.buf, self.sbuf,
@@ -184,15 +189,22 @@ class Engine:
                 if count <= 0 or self.ctl[C_STOPPED] == 1:
                     break
                 top = max(int(self.out_scores[i]) for i in range(count))
-                if top <= int(alpha) and int(alpha) > -INF:
-                    delta *= 2
+                failed_low = top <= int(alpha) and int(alpha) > -INF
+                failed_high = top >= int(beta) and int(beta) < INF
+                if not (failed_low or failed_high):
+                    break
+                # A score that has jumped far - a mate found or a piece lost -
+                # would take a dozen doublings to catch; each one is a full
+                # search, and that is how a clock gets burnt. Open the window.
+                fails += 1
+                if fails >= 3 or abs(top) >= MATE_IN_MAX:
+                    alpha, beta = np.int32(-INF), np.int32(INF)
+                    continue
+                delta *= 2
+                if failed_low:
                     alpha = np.int32(max(-INF, top - delta))
-                    continue
-                if top >= int(beta) and int(beta) < INF:
-                    delta *= 2
+                else:
                     beta = np.int32(min(INF, top + delta))
-                    continue
-                break
 
             if count > 0 and self.ctl[C_STOPPED] != 1:
                 pairs = sorted(
