@@ -17,6 +17,7 @@ import importlib
 import math
 import random
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -102,39 +103,78 @@ def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
         board.push(move)
 
 
+class Ponder:
+    """Minimal ponder driver for a match: think on the other side's time.
+    Needs a second core to mean anything - on one core it only steals from
+    the opponent, which flatters the pondering side."""
+
+    def __init__(self, engine) -> None:
+        self.engine = engine
+        self.thread: threading.Thread | None = None
+        self.event = threading.Event()
+
+    def start(self, fen: str, game_ply: int) -> None:
+        self.event.clear()
+        self.thread = threading.Thread(
+            target=self.engine.think, args=(fen, 600_000.0, 600_000.0),
+            kwargs={"game_ply": game_ply, "stop": self.event}, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        if self.thread is None:
+            return
+        self.event.set()
+        while self.thread.is_alive():
+            self.engine.abort()
+            self.thread.join(0.005)
+        self.thread = None
+
+
 def play(white, black, fen: str, ms: float, ply_cap: int = 300,
-         ms_white: float | None = None, ms_black: float | None = None) -> float:
+         ms_white: float | None = None, ms_black: float | None = None,
+         ponder=None) -> float:
     """One game. Returns White's score: 1.0, 0.5 or 0.0.
 
     The two sides may be given different budgets, which is how you price what
-    extra thinking time is worth without simulating a whole clock.
+    extra thinking time is worth without simulating a whole clock. `ponder`
+    names an engine that thinks on its opponent's time.
     """
     budget = {chess.WHITE: ms_white or ms, chess.BLACK: ms_black or ms}
     board = chess.Board(fen)
     engines = {chess.WHITE: white, chess.BLACK: black}
-    while True:
-        if board.is_game_over(claim_draw=True):
-            r = board.result(claim_draw=True)
-            return {"1-0": 1.0, "0-1": 0.0}.get(r, 0.5)
-        if len(board.move_stack) >= ply_cap:
-            vals = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
-                    chess.ROOK: 5, chess.QUEEN: 9}
-            bal = sum(v * (len(board.pieces(p, chess.WHITE)) - len(board.pieces(p, chess.BLACK)))
-                      for p, v in vals.items())
-            return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
-        eng = engines[board.turn]
-        bms = budget[board.turn]
-        ranked = eng.think(board.fen(), budget_ms=bms, hard_ms=bms * 3,
-                           game_ply=len(board.move_stack))
-        if not ranked:
-            return 0.0 if board.turn == chess.WHITE else 1.0
-        try:
-            move = chess.Move.from_uci(ranked[0][0])
-        except ValueError:
-            return 0.0 if board.turn == chess.WHITE else 1.0
-        if move not in board.legal_moves:
-            return 0.0 if board.turn == chess.WHITE else 1.0
-        board.push(move)
+    pond = Ponder(ponder) if ponder is not None else None
+    try:
+        while True:
+            if board.is_game_over(claim_draw=True):
+                r = board.result(claim_draw=True)
+                return {"1-0": 1.0, "0-1": 0.0}.get(r, 0.5)
+            if len(board.move_stack) >= ply_cap:
+                vals = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+                        chess.ROOK: 5, chess.QUEEN: 9}
+                bal = sum(v * (len(board.pieces(p, chess.WHITE))
+                               - len(board.pieces(p, chess.BLACK)))
+                          for p, v in vals.items())
+                return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
+            eng = engines[board.turn]
+            bms = budget[board.turn]
+            if pond is not None and eng is ponder:
+                pond.stop()
+            ranked = eng.think(board.fen(), budget_ms=bms, hard_ms=bms * 3,
+                               game_ply=len(board.move_stack))
+            if not ranked:
+                return 0.0 if board.turn == chess.WHITE else 1.0
+            try:
+                move = chess.Move.from_uci(ranked[0][0])
+            except ValueError:
+                return 0.0 if board.turn == chess.WHITE else 1.0
+            if move not in board.legal_moves:
+                return 0.0 if board.turn == chess.WHITE else 1.0
+            board.push(move)
+            if pond is not None and eng is ponder:
+                pond.start(board.fen(), len(board.move_stack))
+    finally:
+        if pond is not None:
+            pond.stop()
 
 
 def elo(score: float, n: int) -> tuple[float, float]:
@@ -163,6 +203,8 @@ def main() -> None:
                     help="play with real clocks and each side's own allocator")
     ap.add_argument("--base-ms", type=float, default=120_000.0)
     ap.add_argument("--inc-ms", type=float, default=500.0)
+    ap.add_argument("--ponder-a", action="store_true",
+                    help="let A think on B's time (run on two cores)")
     ap.add_argument("--seed", type=int, default=17,
                     help="opening seed; change it for an independent sample")
     args = ap.parse_args()
@@ -188,7 +230,8 @@ def main() -> None:
         else:
             a_ms = args.ms_a if args.ms_a is not None else args.ms
             mw, mb = (a_ms, args.ms) if a_is_white else (args.ms, a_ms)
-            s = play(w, bl, fen, args.ms, ms_white=mw, ms_black=mb)
+            s = play(w, bl, fen, args.ms, ms_white=mw, ms_black=mb,
+                     ponder=ea if args.ponder_a else None)
         a_score = s if a_is_white else 1.0 - s
         if a_score == 1.0:
             wins += 1

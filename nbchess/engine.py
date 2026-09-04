@@ -9,6 +9,7 @@ search that keeps changing its mind is worth more time.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import numpy as np
 
@@ -117,6 +118,11 @@ class Engine:
         self.history[:] = 0
         self.killers[:] = 0
 
+    def abort(self) -> None:
+        """Raise the kernel's stop flag from another thread. The search polls
+        it every 2048 nodes, so a running iteration ends within a millisecond."""
+        self.ctl[C_STOPPED] = 1
+
     def _load_history(self, history: tuple[str, ...]) -> int:
         """Hash the positions already seen this game so the search can detect a
         repetition against the real game, not only within its own tree."""
@@ -130,8 +136,14 @@ class Engine:
     def think(self, fen: str, budget_ms: float, hard_ms: float,
               history: tuple[str, ...] = (), game_ply: int = 0,
               max_depth: int = MAX_PLY - 8,
+              stop: Any = None,
               ) -> list[tuple[str, int]]:
-        """Search `fen` and return (uci, score) pairs, best first."""
+        """Search `fen` and return (uci, score) pairs, best first.
+
+        `stop`, if given, is checked before every iteration (anything with an
+        `is_set()` method); a caller that also raises the kernel's stop flag
+        gets the current iteration abandoned within a few thousand nodes.
+        """
         started = time.perf_counter()
         set_fen(self.stack[0], self.mbs[0], fen)
         age_history(self.history)
@@ -154,6 +166,8 @@ class Engine:
         last_elapsed = 0.0
 
         for depth in range(1, max_depth + 1):
+            if stop is not None and stop.is_set():
+                break
             alpha, beta = np.int32(-INF), np.int32(INF)
             delta = ASPIRATION_DELTA
             if depth >= 5:
@@ -203,6 +217,8 @@ class Engine:
                 break
             if abs(score) >= MATE_IN_MAX:      # proven mate, nothing left to find
                 break
+            if stop is not None:               # pondering: only the clock above ends it
+                continue
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             iter_ms = elapsed_ms - last_elapsed
             last_elapsed = elapsed_ms

@@ -16,6 +16,7 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMB
 # The filesystem is read-only apart from /tmp, so the JIT cache must live there.
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba-cache")
 
+import threading  # noqa: E402
 import time  # noqa: E402
 
 import chess  # noqa: E402
@@ -104,8 +105,67 @@ class GameTracker:
         return tuple(fens)
 
 
+class Ponderer:
+    """Think on the opponent's clock.
+
+    After our move is sent the process keeps its core, so the engine searches
+    the position the opponent is looking at and fills the transposition table
+    with every reply's subtree. Whatever they play, the next search starts
+    from a warm table. The one rule that matters: the ponder thread must be
+    gone before the real search starts, because two searches sharing one core
+    each run at half speed, and a thread that never stops would flag us.
+    """
+
+    #: Longest a ponder may run. Far beyond any opponent's clock; a safety net.
+    LIMIT_MS = 600_000.0
+    #: If a thread ever outlives this wait, never ponder again this game.
+    JOIN_S = 3.0
+
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+        self.thread: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.enabled = True
+        self.started = 0
+        self.wasted = 0
+
+    def start(self, fen: str, history: tuple[str, ...], game_ply: int) -> None:
+        if not self.enabled or self.thread is not None:
+            return
+        self.stop_event.clear()
+        self.thread = threading.Thread(
+            target=self._run, args=(fen, history, game_ply), daemon=True)
+        self.started += 1
+        self.thread.start()
+
+    def _run(self, fen: str, history: tuple[str, ...], game_ply: int) -> None:
+        try:
+            self.engine.think(fen, budget_ms=self.LIMIT_MS, hard_ms=self.LIMIT_MS,
+                              history=history, game_ply=game_ply, stop=self.stop_event)
+        except Exception:
+            pass                          # a failed ponder is merely a cold table
+
+    def stop(self) -> None:
+        """Stop and join. Returns only when the thread is gone, or disables
+        pondering for the rest of the game if it somehow is not."""
+        th = self.thread
+        if th is None:
+            return
+        self.stop_event.set()
+        deadline = time.perf_counter() + self.JOIN_S
+        while th.is_alive() and time.perf_counter() < deadline:
+            # set every pass: a think() that was just starting resets the flag
+            self.engine.abort()
+            th.join(0.005)
+        if th.is_alive():
+            self.enabled = False
+            self.wasted += 1
+        self.thread = None
+
+
 _tracker = GameTracker()
 _overhead_ms = INITIAL_OVERHEAD_MS
+_ponderer = Ponderer(_engine) if _engine is not None else None
 
 
 def _choose(board: chess.Board, ranked: list[tuple[str, int]]) -> str | None:
@@ -161,11 +221,18 @@ def get_move(fen: str, time_left_ms: int) -> str:
     entered = time.perf_counter()
     global _overhead_ms
 
+    if _ponderer is not None:
+        try:
+            _ponderer.stop()               # first, before anything else costs time
+        except Exception:
+            pass
+
     board = chess.Board(fen)
     legal = {move.uci() for move in board.legal_moves}
     if len(legal) == 1:                       # nothing to think about
         only = next(iter(legal))
         _tracker.commit(only)
+        _ponder()
         return only
 
     chosen: str | None = None
@@ -208,4 +275,19 @@ def get_move(fen: str, time_left_ms: int) -> str:
         slack = spent_ms - getattr(_engine, "last_search_ms", spent_ms)
         if 0.0 <= slack < 2000.0:
             _overhead_ms = 0.8 * _overhead_ms + 0.2 * (slack + 100.0)
+    _ponder()
     return chosen
+
+
+def _ponder() -> None:
+    """Start thinking on the position after our move, if the game goes on."""
+    if _ponderer is None or _tracker.board is None:
+        return
+    try:
+        board = _tracker.board
+        if board.is_game_over(claim_draw=True):
+            return
+        history = GameTracker.history_fens(board)
+        _ponderer.start(board.fen(), history, len(board.move_stack))
+    except Exception:
+        pass
