@@ -52,8 +52,16 @@ def featurise(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
     return w, b, 0 if stm == "w" else 1
 
 
-def load(paths: list[Path], limit: int | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    W, B, S, T = [], [], [], []
+def load(paths: list[Path], limit: int | None, residual: bool,
+         ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Positions, targets and - for a residual net - the hand evaluation the
+    network is trained to correct, all from the side to move's view."""
+    if residual:
+        from nbchess.fen import new_stack, set_fen
+        from nbchess.search import evaluate_w
+        from nbchess.terms import WEIGHTS
+        st, mbs, _ = new_stack()
+    W, B, S, T, E = [], [], [], [], []
     for p in paths:
         for line in p.read_text().splitlines():
             parts = line.split("|")
@@ -66,12 +74,17 @@ def load(paths: list[Path], limit: int | None) -> tuple[np.ndarray, np.ndarray, 
             p_cp = 1.0 / (1.0 + math.exp(-cp * SCALE))
             t = LAMBDA * p_cp + (1.0 - LAMBDA) * result
             T.append(t if stm == 0 else 1.0 - t)
+            if residual:
+                set_fen(st[0], mbs[0], fen)
+                E.append(float(evaluate_w(st[0], mbs[0], WEIGHTS)))
+            else:
+                E.append(0.0)
             if limit and len(T) >= limit:
                 break
         if limit and len(T) >= limit:
             break
     return (np.stack(W), np.stack(B), np.array(S, dtype=np.int64),
-            np.array(T, dtype=np.float32))
+            np.array(T, dtype=np.float32), np.array(E, dtype=np.float32))
 
 
 class Net(torch.nn.Module):
@@ -104,18 +117,20 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--out", type=Path, default=Path("nbchess/nnue.npz"))
+    ap.add_argument("--residual", action="store_true",
+                    help="train the net to correct the hand evaluation rather than replace it")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     torch.manual_seed(1)
 
     t0 = time.perf_counter()
-    W, B, S, T = load(args.data, args.limit)
+    W, B, S, T, E = load(args.data, args.limit, args.residual)
     n = len(T)
     print(f"{n:,} positions loaded in {time.perf_counter() - t0:.0f}s", flush=True)
     idx = np.random.default_rng(1).permutation(n)
     hold = idx[: n // 20]
     train = idx[n // 20:]
-    W, B, S, T = (torch.from_numpy(x) for x in (W, B, S, T))
+    W, B, S, T, E = (torch.from_numpy(x) for x in (W, B, S, T, E))
 
     net = Net(args.hidden)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
@@ -126,7 +141,7 @@ def main() -> None:
             tot = 0.0
             for i in range(0, len(ix), 65536):
                 j = torch.from_numpy(ix[i:i + 65536])
-                p = torch.sigmoid(net(W[j], B[j], S[j]) * SCALE)
+                p = torch.sigmoid((net(W[j], B[j], S[j]) + E[j]) * SCALE)
                 tot += float(((p - T[j]) ** 2).sum())
             return tot / len(ix)
 
@@ -136,7 +151,7 @@ def main() -> None:
         perm = np.random.default_rng(ep).permutation(train)
         for i in range(0, len(perm), args.batch):
             j = torch.from_numpy(perm[i:i + args.batch])
-            p = torch.sigmoid(net(W[j], B[j], S[j]) * SCALE)
+            p = torch.sigmoid((net(W[j], B[j], S[j]) + E[j]) * SCALE)
             loss = ((p - T[j]) ** 2).mean()
             opt.zero_grad()
             loss.backward()
@@ -151,7 +166,7 @@ def main() -> None:
     b1 = net.ft_bias.detach().numpy().astype(np.float32)
     w2 = net.out.weight.detach().numpy().astype(np.float32)[0] / SCALE   # 2H, in cp
     b2 = np.float32(net.out.bias.detach().numpy()[0] / SCALE)
-    np.savez(args.out, w1=w1, b1=b1, w2=w2, b2=b2)
+    np.savez(args.out, w1=w1, b1=b1, w2=w2, b2=b2, residual=np.int32(1 if args.residual else 0))
     print(f"wrote {args.out}  ({args.out.stat().st_size:,} bytes)")
 
 

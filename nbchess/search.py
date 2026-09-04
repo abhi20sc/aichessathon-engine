@@ -47,6 +47,7 @@ from .core import (
     rook_att,
 )
 from .evaltables import MATERIAL
+from .nnue import RESIDUAL as NN_RESIDUAL
 from .nnue import USE_NNUE, nn_eval
 from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
 from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
@@ -410,6 +411,8 @@ def evaluate(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
     branch not taken costs nothing."""
     if USE_NNUE:
         sc = nn_eval(s, mb)                       # side to move's view
+        if NN_RESIDUAL:
+            return sc + evaluate_w(s, mb, WEIGHTS)
         white = sc if s[14] == uint64(0) else -sc
         white = endgame_adjust(s, white)
         return white if s[14] == uint64(0) else -white

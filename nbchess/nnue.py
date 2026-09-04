@@ -28,11 +28,14 @@ if USE_NNUE:
         B1: npt.NDArray[np.float32] = np.ascontiguousarray(_z["b1"], dtype=np.float32)
         W2: npt.NDArray[np.float32] = np.ascontiguousarray(_z["w2"], dtype=np.float32)
         B2 = float(_z["b2"])
+        #: A residual net corrects the hand evaluation instead of replacing it.
+        RESIDUAL = bool(int(_z["residual"])) if "residual" in _z else False
 else:  # placeholders so the module still compiles; never used
     W1 = np.zeros((769, 8), dtype=np.float32)
     B1 = np.zeros(8, dtype=np.float32)
     W2 = np.zeros(16, dtype=np.float32)
     B2 = 0.0
+    RESIDUAL = False
 HIDDEN = int(B1.shape[0])
 
 
