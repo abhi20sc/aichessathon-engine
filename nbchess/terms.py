@@ -117,7 +117,35 @@ I_BP_MG = I_DBL_EG + 1
 I_BP_EG = I_BP_MG + 1
 #: Percentage scale applied to the king-safety penalty; 100 leaves it unchanged.
 I_KS = I_BP_EG + 1
-N_WEIGHTS = I_KS + 1
+#: Pawn shelter: penalty by distance (1-7) to the nearest own pawn ahead of the
+#: king on its file and the two beside it; 7 means no pawn at all.
+I_SHELTER, N_SHELTER = I_KS + 1, 8
+#: Pawn storm: penalty by distance (1-7) to the nearest enemy pawn ahead of
+#: the king on those files.
+I_STORM, N_STORM = I_SHELTER + N_SHELTER, 8
+#: A piece (not a pawn) standing where an enemy pawn attacks it.
+I_THREAT_MG = I_STORM + N_STORM
+I_THREAT_EG = I_THREAT_MG + 1
+#: Rook on a file with no pawns at all, or none of its own.
+I_ROPEN_MG = I_THREAT_EG + 1
+I_ROPEN_EG = I_ROPEN_MG + 1
+I_RSEMI_MG = I_ROPEN_EG + 1
+I_RSEMI_EG = I_RSEMI_MG + 1
+#: Passed pawns in the endgame: how far each king is from the square in front.
+I_PK_ENEMY = I_RSEMI_EG + 1
+I_PK_OWN = I_PK_ENEMY + 1
+#: Material corrections per piece type (P N B R Q), added to the PeSTO values.
+I_MAT_MG, N_MAT = I_PK_OWN + 1, 5
+I_MAT_EG = I_MAT_MG + N_MAT
+N_WEIGHTS = I_MAT_EG + N_MAT
+
+#: Starting points, each a conventional value; the data sets the real ones.
+SHELTER = np.array([0, 0, -8, -20, -30, -36, -40, -50], dtype=np.int32)
+STORM = np.array([0, -10, -30, -20, -10, -4, 0, 0], dtype=np.int32)
+THREAT_MG, THREAT_EG = np.int32(-28), np.int32(-22)
+ROOK_OPEN_MG, ROOK_OPEN_EG = np.int32(26), np.int32(10)
+ROOK_SEMI_MG, ROOK_SEMI_EG = np.int32(12), np.int32(6)
+PASSED_KING_ENEMY, PASSED_KING_OWN = np.int32(6), np.int32(4)
 
 
 def pack() -> npt.NDArray[np.int32]:
@@ -139,6 +167,18 @@ def pack() -> npt.NDArray[np.int32]:
     w[I_BP_MG] = BISHOP_PAIR_MG
     w[I_BP_EG] = BISHOP_PAIR_EG
     w[I_KS] = 100
+    w[I_SHELTER:I_SHELTER + N_SHELTER] = SHELTER
+    w[I_STORM:I_STORM + N_STORM] = STORM
+    w[I_THREAT_MG] = THREAT_MG
+    w[I_THREAT_EG] = THREAT_EG
+    w[I_ROPEN_MG] = ROOK_OPEN_MG
+    w[I_ROPEN_EG] = ROOK_OPEN_EG
+    w[I_RSEMI_MG] = ROOK_SEMI_MG
+    w[I_RSEMI_EG] = ROOK_SEMI_EG
+    w[I_PK_ENEMY] = PASSED_KING_ENEMY
+    w[I_PK_OWN] = PASSED_KING_OWN
+    w[I_MAT_MG:I_MAT_MG + N_MAT] = 0
+    w[I_MAT_EG:I_MAT_EG + N_MAT] = 0
     return w
 
 

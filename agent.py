@@ -116,8 +116,9 @@ class Ponderer:
     each run at half speed, and a thread that never stops would flag us.
     """
 
-    #: Longest a ponder may run. Far beyond any opponent's clock; a safety net.
-    LIMIT_MS = 600_000.0
+    #: Longest a ponder may run. Opponents rarely think longer, and a process
+    #: whose game has ended must not keep a core busy while the next one compiles.
+    LIMIT_MS = 30_000.0
     #: If a thread ever outlives this wait, never ponder again this game.
     JOIN_S = 3.0
 

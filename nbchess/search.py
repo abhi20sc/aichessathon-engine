@@ -51,6 +51,7 @@ from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
 from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
 from .terms import (
     ADJACENT_FILES,
+    FILE_BB,
     FRONT_MASK,
     I_BI_EG,
     I_BI_MG,
@@ -63,6 +64,8 @@ from .terms import (
     I_KN_EG,
     I_KN_MG,
     I_KS,
+    I_MAT_EG,
+    I_MAT_MG,
     I_PA_EG,
     I_PA_MG,
     I_QU_EG,
@@ -75,6 +78,16 @@ from .terms import (
     KS_WEIGHT,
     PASSED_MASK,
     WEIGHTS,
+    I_SHELTER,
+    I_STORM,
+    I_THREAT_MG,
+    I_THREAT_EG,
+    I_ROPEN_MG,
+    I_ROPEN_EG,
+    I_RSEMI_MG,
+    I_RSEMI_EG,
+    I_PK_ENEMY,
+    I_PK_OWN,
 )
 from .tune import (
     ADJUDICATION_BLEND,
@@ -159,6 +172,10 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
             mg -= MG_B[pt, sq]
             eg -= EG_B[pt, sq]
             phase += PHASE[pt]
+    for pt in range(5):
+        diff = int32(popcount(s[pt])) - int32(popcount(s[uint64(6) + uint64(pt)]))
+        mg += diff * w[I_MAT_MG + pt]
+        eg += diff * w[I_MAT_EG + pt]
 
     # ---- mobility, counted on squares not attacked by an enemy pawn ----
     for side in range(2):
@@ -215,12 +232,46 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
             if (PASSED_MASK[side, sq] & theirs) == uint64(0):
                 mg += sign * w[I_PA_MG + rel]
                 eg += sign * w[I_PA_EG + rel]
+                # in the endgame the kings decide: distance to the stop square
+                if rel >= uint64(3):
+                    stop = sq + uint64(8) if side == 0 else sq - uint64(8)
+                    sf = int32(stop & uint64(7))
+                    sr = int32(stop >> uint64(3))
+                    ok = lsb(s[uint64(side) * uint64(6) + uint64(5)])
+                    ek = lsb(s[(uint64(1) - uint64(side)) * uint64(6) + uint64(5)])
+                    d_own = max(abs(int32(ok & uint64(7)) - sf), abs(int32(ok >> uint64(3)) - sr))
+                    d_enemy = max(abs(int32(ek & uint64(7)) - sf), abs(int32(ek >> uint64(3)) - sr))
+                    eg += sign * int32(rel) * (w[I_PK_ENEMY] * d_enemy - w[I_PK_OWN] * d_own) // int32(4)
             if (ADJACENT_FILES[f] & pawns) == uint64(0):
                 mg += sign * w[I_ISO_MG]
                 eg += sign * w[I_ISO_EG]
             if (FRONT_MASK[side, sq] & pawns) != uint64(0):
                 mg += sign * w[I_DBL_MG]
                 eg += sign * w[I_DBL_EG]
+
+    # ---- threats and rook files ----
+    for side in range(2):
+        off = uint64(side) * uint64(6)
+        sign = int32(1) if side == 0 else int32(-1)
+        bad = bp_att if side == 0 else wp_att
+        pieces = s[off + uint64(1)] | s[off + uint64(2)] | s[off + uint64(3)] | s[off + uint64(4)]
+        n = int32(popcount(pieces & bad))
+        mg += sign * n * w[I_THREAT_MG]
+        eg += sign * n * w[I_THREAT_EG]
+        own_p = s[off]
+        their_p = s[(uint64(1) - uint64(side)) * uint64(6)]
+        b = s[off + uint64(3)]
+        while b:
+            sq = lsb(b)
+            b &= b - uint64(1)
+            fbb = FILE_BB[sq & uint64(7)]
+            if (fbb & own_p) == uint64(0):
+                if (fbb & their_p) == uint64(0):
+                    mg += sign * w[I_ROPEN_MG]
+                    eg += sign * w[I_ROPEN_EG]
+                else:
+                    mg += sign * w[I_RSEMI_MG]
+                    eg += sign * w[I_RSEMI_EG]
 
     # ---- king safety, middlegame only ----
     for side in range(2):
@@ -230,6 +281,33 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
         off = them * uint64(6)
         units = int32(0)
         attackers = int32(0)
+
+        # pawn shelter and storm on the king's file and its neighbours
+        own_p = s[uint64(side) * uint64(6)]
+        their_p = s[off]
+        kf = int32(ksq & uint64(7))
+        kr = int32(ksq >> uint64(3))
+        step = int32(1) if side == 0 else int32(-1)
+        shelter = int32(0)
+        for df in range(-1, 2):
+            ff = kf + int32(df)
+            if ff < int32(0) or ff > int32(7):
+                continue
+            d_own = int32(7)
+            d_their = int32(7)
+            for d in range(1, 8):
+                rr = kr + step * int32(d)
+                if rr < int32(0) or rr > int32(7):
+                    break
+                bit = uint64(1) << uint64(rr * int32(8) + ff)
+                if d_own == int32(7) and (own_p & bit) != uint64(0):
+                    d_own = int32(d)
+                if d_their == int32(7) and (their_p & bit) != uint64(0):
+                    d_their = int32(d)
+                if d_own != int32(7) and d_their != int32(7):
+                    break
+            shelter += w[I_SHELTER + d_own] + w[I_STORM + d_their]
+        mg += shelter if side == 0 else -shelter
         for pt in range(1, 5):
             b = s[off + uint64(pt)]
             hits = int32(0)
@@ -677,6 +755,69 @@ def quiesce(
     return best
 
 
+@njit(int64(int64, int64, boolean, boolean, boolean, boolean), cache=False, nogil=True)
+def lmr_reduction(depth: int, legal: int, is_pv: bool, improving: bool,
+                  is_killer: bool, bad_capture: bool) -> int:
+    """How many plies to take off a late move. Kept out of negamax so the
+    search kernel stays small enough to compile inside the init budget."""
+    dd = depth if depth < 63 else 63
+    mm = legal if legal < 63 else 63
+    r = int64(LMR[dd, mm])
+    if is_pv:
+        r -= 1
+    if improving:
+        r -= 1
+    if is_killer:
+        r -= 1
+    if bad_capture:
+        r -= 1
+    if r < 0:
+        r = 0
+    if r > depth - 2:
+        r = depth - 2
+    return r
+
+
+@njit(int64(uint32[:, :], int32[:, :, :], uint32[:], int64, int64, uint32, int64, int64),
+      cache=False, nogil=True)
+def on_cutoff(killers: npt.NDArray[np.uint32], history: npt.NDArray[np.int32],
+              quiet_list: npt.NDArray[np.uint32], ply: int, us: int, mv: np.uint32,
+              depth: int, quiets: int) -> int:
+    """A quiet move refuted the position: remember it, and mark down the
+    quiets tried before it."""
+    if killers[ply, 0] != mv:
+        killers[ply, 1] = killers[ply, 0]
+        killers[ply, 0] = mv
+    bonus = int32(depth * depth * 16)
+    hist_update(history, us, mv, bonus)
+    for q in range(quiets - 1):
+        hist_update(history, us, quiet_list[q], -bonus)
+    return 0
+
+
+@njit(int64(uint64[:], uint32[:], int16[:], int8[:], uint8[:], uint64, uint64, int32,
+            int64, int64, uint8, uint32), cache=False, nogil=True)
+def tt_store(tt_key: npt.NDArray[np.uint64], tt_move: npt.NDArray[np.uint32],
+             tt_score: npt.NDArray[np.int16], tt_depth: npt.NDArray[np.int8],
+             tt_bound: npt.NDArray[np.uint8], idx: np.uint64, key: np.uint64,
+             best: np.int32, ply: int, depth: int, bound: np.uint8,
+             best_move: np.uint32) -> int:
+    """Depth-preferred replacement; an exact-key match always wins its slot."""
+    same_key = tt_key[idx] == key
+    replace = (not same_key or int64(tt_depth[idx]) <= depth
+               or bound == uint8(BOUND_EXACT))
+    if replace:
+        tt_key[idx] = key
+        tt_score[idx] = int16(to_tt(best, ply))
+        tt_depth[idx] = int8(depth)
+        tt_bound[idx] = bound
+        # a fail-low has no move worth keeping over one already stored here,
+        # but a slot taken from another position must not keep its stale move
+        if bound != uint8(BOUND_UPPER) or not same_key:
+            tt_move[idx] = best_move
+    return 0
+
+
 @njit(int32(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
             uint64[:], uint32[:], int16[:], int8[:], uint8[:],
             uint32[:, :], int32[:, :, :], uint64[:], int32[:],
@@ -835,21 +976,8 @@ def negamax(
         # ---- late move reductions ----
         r = 0
         if depth >= 3 and legal > 2 and (is_quiet or bad_capture):
-            dd = depth if depth < 63 else 63
-            mm = legal if legal < 63 else 63
-            r = int64(LMR[dd, mm])
-            if is_pv:
-                r -= 1
-            if improving:
-                r -= 1
-            if mv == killers[ply, 0] or mv == killers[ply, 1]:
-                r -= 1
-            if bad_capture:
-                r -= 1
-            if r < 0:
-                r = 0
-            if r > depth - 2:
-                r = depth - 2
+            r = lmr_reduction(depth, legal, is_pv, improving,
+                              mv == killers[ply, 0] or mv == killers[ply, 1], bad_capture)
 
         # ---- principal variation search ----
         if legal == 1:
@@ -878,13 +1006,7 @@ def negamax(
             alpha = sc
         if alpha >= beta:
             if is_quiet:
-                if killers[ply, 0] != mv:
-                    killers[ply, 1] = killers[ply, 0]
-                    killers[ply, 0] = mv
-                bonus = int32(depth * depth * 16)
-                hist_update(history, int64(us), mv, bonus)
-                for q in range(quiets - 1):     # penalise the quiets that failed
-                    hist_update(history, int64(us), quiet_list[q], -bonus)
+                on_cutoff(killers, history, quiet_list, ply, int64(us), mv, depth, quiets)
             break
 
     if legal == 0:
@@ -893,19 +1015,8 @@ def negamax(
     bound = (uint8(BOUND_LOWER) if best >= beta
              else uint8(BOUND_EXACT) if best > old_alpha
              else uint8(BOUND_UPPER))
-    # depth-preferred replacement, but an exact-key match always wins its slot
-    same_key = tt_key[idx] == key
-    replace = (not same_key or int64(tt_depth[idx]) <= depth
-               or bound == uint8(BOUND_EXACT))
-    if replace:
-        tt_key[idx] = key
-        tt_score[idx] = int16(to_tt(best, ply))
-        tt_depth[idx] = int8(depth)
-        tt_bound[idx] = bound
-        # a fail-low has no move worth keeping over one already stored here,
-        # but a slot taken from another position must not keep its stale move
-        if bound != uint8(BOUND_UPPER) or not same_key:
-            tt_move[idx] = best_move
+    tt_store(tt_key, tt_move, tt_score, tt_depth, tt_bound, idx, key, best, ply, depth,
+             bound, best_move)
     return best
 
 
