@@ -47,6 +47,7 @@ from .core import (
     rook_att,
 )
 from .evaltables import MATERIAL
+from .nnue import USE_NNUE, nn_eval
 from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
 from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
 from .terms import (
@@ -129,6 +130,66 @@ C_GAMEPLY = 6
 
 FILE_A = uint64(0x0101010101010101)
 FILE_H = uint64(0x8080808080808080)
+
+
+@njit(int32(uint64[:], int32), cache=False, nogil=True)
+def endgame_adjust(s: npt.NDArray[np.uint64], score: np.int32) -> np.int32:
+    """Two corrections applied to any evaluation, in White's view: a mop-up
+    bonus against a bare king, and a scale-down of material that cannot win."""
+    # ---- mop-up: drive a bare king to the edge (or the right corner) ----
+    # Piece-square tables alone leave KBB and KBN unfinished before the fifty-
+    # move rule intervenes. Once one side has only a king and the other has
+    # mating material, reward cornering the king and bringing ours close.
+    for side in range(2):
+        loser = uint64(1) - uint64(side)
+        if s[uint64(12) + loser] != s[loser * uint64(6) + uint64(5)]:
+            continue  # the other side still has more than a king
+        off = uint64(side) * uint64(6)
+        nb = int32(popcount(s[off + uint64(2)]))
+        nn = int32(popcount(s[off + uint64(1)]))
+        heavy = s[off + uint64(3)] | s[off + uint64(4)]
+        if heavy == uint64(0) and nb + nn < int32(2):
+            break  # no mating material at all
+        if heavy == uint64(0) and nb == int32(0):
+            break  # knights alone cannot force mate
+        wk = lsb(s[off + uint64(5)])
+        lk = lsb(s[loser * uint64(6) + uint64(5)])
+        lf = int32(lk & uint64(7))
+        lr = int32(lk >> uint64(3))
+        md = abs(int32(wk & uint64(7)) - lf) + abs(int32(wk >> uint64(3)) - lr)
+        if heavy == uint64(0) and nb == int32(1) and nn >= int32(1):
+            # bishop and knight: mate only in a corner of the bishop's colour
+            bsq = lsb(s[off + uint64(2)])
+            dark = ((int32(bsq & uint64(7)) + int32(bsq >> uint64(3))) & int32(1)) == int32(0)
+            if dark:
+                cd = min(lf + lr, (int32(7) - lf) + (int32(7) - lr))
+            else:
+                cd = min((int32(7) - lf) + lr, lf + (int32(7) - lr))
+            bonus = int32(5) * (int32(14) - cd)
+        else:
+            cf = lf if lf < int32(4) else int32(7) - lf
+            cr = lr if lr < int32(4) else int32(7) - lr
+            bonus = int32(10) * (int32(6) - cf - cr)
+        bonus += int32(4) * (int32(14) - md)
+        score += bonus if side == 0 else -bonus
+        break
+
+    # ---- drawish material: a lone minor, or two knights, cannot win ----
+    # Without this the engine happily trades down into KB v K "a bishop up".
+    strong = uint64(0) if score > int32(0) else uint64(1)
+    soff = strong * uint64(6)
+    if s[soff] == uint64(0):  # no pawns
+        heavy = s[soff + uint64(3)] | s[soff + uint64(4)]
+        if heavy == uint64(0):
+            nb = int32(popcount(s[soff + uint64(2)]))
+            nn = int32(popcount(s[soff + uint64(1)]))
+            if nb + nn <= int32(1):
+                score = score // int32(16)
+            elif nb == int32(0) and nn == int32(2):
+                weak = uint64(1) - strong
+                if s[uint64(12) + weak] == s[weak * uint64(6) + uint64(5)]:
+                    score = score // int32(16)
+    return score
 
 
 @njit(int32(uint64[:], int8[:], _W_RO), cache=False, nogil=True)
@@ -338,65 +399,20 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
         phase = int32(PHASE_MAX)
     score = (mg * phase + eg * (int32(PHASE_MAX) - phase)) // int32(PHASE_MAX)
 
-    # ---- mop-up: drive a bare king to the edge (or the right corner) ----
-    # Piece-square tables alone leave KBB and KBN unfinished before the fifty-
-    # move rule intervenes. Once one side has only a king and the other has
-    # mating material, reward cornering the king and bringing ours close.
-    for side in range(2):
-        loser = uint64(1) - uint64(side)
-        if s[uint64(12) + loser] != s[loser * uint64(6) + uint64(5)]:
-            continue  # the other side still has more than a king
-        off = uint64(side) * uint64(6)
-        nb = int32(popcount(s[off + uint64(2)]))
-        nn = int32(popcount(s[off + uint64(1)]))
-        heavy = s[off + uint64(3)] | s[off + uint64(4)]
-        if heavy == uint64(0) and nb + nn < int32(2):
-            break  # no mating material at all
-        if heavy == uint64(0) and nb == int32(0):
-            break  # knights alone cannot force mate
-        wk = lsb(s[off + uint64(5)])
-        lk = lsb(s[loser * uint64(6) + uint64(5)])
-        lf = int32(lk & uint64(7))
-        lr = int32(lk >> uint64(3))
-        md = abs(int32(wk & uint64(7)) - lf) + abs(int32(wk >> uint64(3)) - lr)
-        if heavy == uint64(0) and nb == int32(1) and nn >= int32(1):
-            # bishop and knight: mate only in a corner of the bishop's colour
-            bsq = lsb(s[off + uint64(2)])
-            dark = ((int32(bsq & uint64(7)) + int32(bsq >> uint64(3))) & int32(1)) == int32(0)
-            if dark:
-                cd = min(lf + lr, (int32(7) - lf) + (int32(7) - lr))
-            else:
-                cd = min((int32(7) - lf) + lr, lf + (int32(7) - lr))
-            bonus = int32(5) * (int32(14) - cd)
-        else:
-            cf = lf if lf < int32(4) else int32(7) - lf
-            cr = lr if lr < int32(4) else int32(7) - lr
-            bonus = int32(10) * (int32(6) - cf - cr)
-        bonus += int32(4) * (int32(14) - md)
-        score += bonus if side == 0 else -bonus
-        break
-
-    # ---- drawish material: a lone minor, or two knights, cannot win ----
-    # Without this the engine happily trades down into KB v K "a bishop up".
-    strong = uint64(0) if score > int32(0) else uint64(1)
-    soff = strong * uint64(6)
-    if s[soff] == uint64(0):  # no pawns
-        heavy = s[soff + uint64(3)] | s[soff + uint64(4)]
-        if heavy == uint64(0):
-            nb = int32(popcount(s[soff + uint64(2)]))
-            nn = int32(popcount(s[soff + uint64(1)]))
-            if nb + nn <= int32(1):
-                score = score // int32(16)
-            elif nb == int32(0) and nn == int32(2):
-                weak = uint64(1) - strong
-                if s[uint64(12) + weak] == s[weak * uint64(6) + uint64(5)]:
-                    score = score // int32(16)
+    score = endgame_adjust(s, score)
     return score if s[14] == uint64(0) else -score
 
 
 @njit(int32(uint64[:], int8[:]), cache=False, nogil=True)
 def evaluate(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
-    """Evaluate with the shipped weights."""
+    """The shipped evaluation: the network when one is packaged, otherwise
+    the hand-written terms. USE_NNUE is a compile-time constant, so the
+    branch not taken costs nothing."""
+    if USE_NNUE:
+        sc = nn_eval(s, mb)                       # side to move's view
+        white = sc if s[14] == uint64(0) else -sc
+        white = endgame_adjust(s, white)
+        return white if s[14] == uint64(0) else -white
     return evaluate_w(s, mb, WEIGHTS)
 
 

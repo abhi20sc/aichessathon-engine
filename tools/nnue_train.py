@@ -1,0 +1,159 @@
+"""Train a small NNUE-style evaluation on labelled positions.
+
+Rows are `fen|result|cp`, as written by tools.pipeline. The network is the
+simplest one that works: 768 piece-square inputs per perspective (own pieces
+first, then the opponent's, board flipped for Black), one shared hidden layer
+with clipped ReLU, and a linear output over the side-to-move and other-side
+accumulators. Output is in centipawns; the loss squashes it through the same
+sigmoid the Texel tuner uses so that the two evaluations share a scale.
+
+    python -m tools.nnue_train --data a.txt b.txt --hidden 128 --epochs 10 \
+        --out nbchess/nnue.npz
+"""
+from __future__ import annotations
+
+import argparse
+import math
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+PAD = 768          # padding index: a fixed zero row
+MAXP = 32          # pieces on the board, at most
+K = 0.9            # Texel K; cp -> probability
+SCALE = K * math.log(10.0) / 400.0
+LAMBDA = 0.7       # weight on the engine label versus the game result
+PIECE = {c: i for i, c in enumerate("PNBRQKpnbrqk")}
+
+
+def featurise(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
+    """Indices for the white and black perspectives, and side to move."""
+    rows, stm = fen.split()[0], fen.split()[1]
+    w = np.full(MAXP, PAD, dtype=np.int64)
+    b = np.full(MAXP, PAD, dtype=np.int64)
+    n = 0
+    rank = 7
+    for row in rows.split("/"):
+        file = 0
+        for ch in row:
+            if ch.isdigit():
+                file += int(ch)
+                continue
+            pc = PIECE[ch]
+            colour, ptype = pc // 6, pc % 6
+            sq = rank * 8 + file
+            w[n] = colour * 384 + ptype * 64 + sq
+            b[n] = (1 - colour) * 384 + ptype * 64 + (sq ^ 56)
+            n += 1
+            file += 1
+        rank -= 1
+    return w, b, 0 if stm == "w" else 1
+
+
+def load(paths: list[Path], limit: int | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    W, B, S, T = [], [], [], []
+    for p in paths:
+        for line in p.read_text().splitlines():
+            parts = line.split("|")
+            if len(parts) < 3:
+                continue
+            fen, result, cp = parts[0], float(parts[1]), float(parts[2])
+            w, b, stm = featurise(fen)
+            W.append(w); B.append(b); S.append(stm)
+            # target from White's view, then flipped to side-to-move below
+            p_cp = 1.0 / (1.0 + math.exp(-cp * SCALE))
+            t = LAMBDA * p_cp + (1.0 - LAMBDA) * result
+            T.append(t if stm == 0 else 1.0 - t)
+            if limit and len(T) >= limit:
+                break
+        if limit and len(T) >= limit:
+            break
+    return (np.stack(W), np.stack(B), np.array(S, dtype=np.int64),
+            np.array(T, dtype=np.float32))
+
+
+class Net(torch.nn.Module):
+    def __init__(self, hidden: int) -> None:
+        super().__init__()
+        self.ft = torch.nn.EmbeddingBag(769, hidden, mode="sum", padding_idx=PAD)
+        self.ft_bias = torch.nn.Parameter(torch.zeros(hidden))
+        self.out = torch.nn.Linear(2 * hidden, 1)
+        torch.nn.init.normal_(self.ft.weight, std=0.05)
+        with torch.no_grad():
+            self.ft.weight[PAD].zero_()
+
+    def forward(self, w: torch.Tensor, b: torch.Tensor, stm: torch.Tensor) -> torch.Tensor:
+        aw = torch.clamp(self.ft(w) + self.ft_bias, 0.0, 1.0)
+        ab = torch.clamp(self.ft(b) + self.ft_bias, 0.0, 1.0)
+        us = torch.where(stm[:, None] == 0, aw, ab)
+        them = torch.where(stm[:, None] == 0, ab, aw)
+        # the linear layer works in probability units; centipawns are 1/SCALE
+        # times larger, so the trainable weights stay O(1)
+        return self.out(torch.cat([us, them], dim=1)).squeeze(1) / SCALE
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--data", type=Path, nargs="+", required=True)
+    ap.add_argument("--hidden", type=int, default=128)
+    ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--batch", type=int, default=16384)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--threads", type=int, default=1)
+    ap.add_argument("--out", type=Path, default=Path("nbchess/nnue.npz"))
+    args = ap.parse_args()
+    torch.set_num_threads(args.threads)
+    torch.manual_seed(1)
+
+    t0 = time.perf_counter()
+    W, B, S, T = load(args.data, args.limit)
+    n = len(T)
+    print(f"{n:,} positions loaded in {time.perf_counter() - t0:.0f}s", flush=True)
+    idx = np.random.default_rng(1).permutation(n)
+    hold = idx[: n // 20]
+    train = idx[n // 20:]
+    W, B, S, T = (torch.from_numpy(x) for x in (W, B, S, T))
+
+    net = Net(args.hidden)
+    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    sched = torch.optim.lr_scheduler.StepLR(opt, step_size=max(1, args.epochs // 3), gamma=0.5)
+
+    def loss_on(ix: np.ndarray) -> float:
+        with torch.no_grad():
+            tot = 0.0
+            for i in range(0, len(ix), 65536):
+                j = torch.from_numpy(ix[i:i + 65536])
+                p = torch.sigmoid(net(W[j], B[j], S[j]) * SCALE)
+                tot += float(((p - T[j]) ** 2).sum())
+            return tot / len(ix)
+
+    print(f"initial   train {loss_on(train[:200000]):.6f}  holdout {loss_on(hold):.6f}", flush=True)
+    for ep in range(args.epochs):
+        t1 = time.perf_counter()
+        perm = np.random.default_rng(ep).permutation(train)
+        for i in range(0, len(perm), args.batch):
+            j = torch.from_numpy(perm[i:i + args.batch])
+            p = torch.sigmoid(net(W[j], B[j], S[j]) * SCALE)
+            loss = ((p - T[j]) ** 2).mean()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            with torch.no_grad():
+                net.ft.weight[PAD].zero_()
+        sched.step()
+        print(f"epoch {ep + 1:2d}  train {loss_on(train[:200000]):.6f}  "
+              f"holdout {loss_on(hold):.6f}  ({time.perf_counter() - t1:.0f}s)", flush=True)
+
+    w1 = net.ft.weight.detach().numpy().astype(np.float32)           # 769 x H
+    b1 = net.ft_bias.detach().numpy().astype(np.float32)
+    w2 = net.out.weight.detach().numpy().astype(np.float32)[0] / SCALE   # 2H, in cp
+    b2 = np.float32(net.out.bias.detach().numpy()[0] / SCALE)
+    np.savez(args.out, w1=w1, b1=b1, w2=w2, b2=b2)
+    print(f"wrote {args.out}  ({args.out.stat().st_size:,} bytes)")
+
+
+if __name__ == "__main__":
+    main()
