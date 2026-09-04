@@ -416,7 +416,7 @@ def see_ge(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8], mv: np.uint32,
     capture on the target square, least valuable attacker first, come out at
     least `threshold` ahead? Pins are ignored, as in most engines.
 
-    The swap-list formulation follows Stockfish: `swap` is the running balance
+    In the usual swap-list formulation `swap` is the running balance
     from the point of view of the side whose turn it is to recapture, and the
     loop breaks as soon as either side would lose by continuing.
     """
