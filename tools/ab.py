@@ -59,8 +59,57 @@ def openings(count: int, seed: int = 17) -> list[str]:
     return out
 
 
-def play(white, black, fen: str, ms: float, ply_cap: int = 300) -> float:
-    """One game. Returns White's score: 1.0, 0.5 or 0.0."""
+def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
+               ply_cap: int = 300) -> float:
+    """One game under a real clock, each side running its own allocator.
+
+    A fixed per-move budget cannot test a time-management change: the whole
+    point of such a change is how the budget is chosen. Here each side is
+    handed a clock and spends from it, and running out loses, exactly as the
+    referee scores it.
+    """
+    board = chess.Board(fen)
+    engines = {chess.WHITE: white, chess.BLACK: black}
+    alloc = {chess.WHITE: wa, chess.BLACK: ba}
+    clock = {chess.WHITE: base, chess.BLACK: base}
+    while True:
+        if board.is_game_over(claim_draw=True):
+            r = board.result(claim_draw=True)
+            return {"1-0": 1.0, "0-1": 0.0}.get(r, 0.5)
+        if len(board.move_stack) >= ply_cap:
+            vals = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+                    chess.ROOK: 5, chess.QUEEN: 9}
+            bal = sum(v * (len(board.pieces(p, chess.WHITE))
+                           - len(board.pieces(p, chess.BLACK)))
+                      for p, v in vals.items())
+            return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
+
+        side = board.turn
+        soft, hard = alloc[side](clock[side], inc, 200.0)
+        t = time.perf_counter()
+        ranked = engines[side].think(board.fen(), budget_ms=soft, hard_ms=hard,
+                                     game_ply=len(board.move_stack))
+        spent = (time.perf_counter() - t) * 1000.0
+        clock[side] -= spent
+        if clock[side] < 0:                      # flag: an immediate loss
+            return 0.0 if side == chess.WHITE else 1.0
+        clock[side] += inc
+        if not ranked:
+            return 0.0 if side == chess.WHITE else 1.0
+        move = chess.Move.from_uci(ranked[0][0])
+        if move not in board.legal_moves:
+            return 0.0 if side == chess.WHITE else 1.0
+        board.push(move)
+
+
+def play(white, black, fen: str, ms: float, ply_cap: int = 300,
+         ms_white: float | None = None, ms_black: float | None = None) -> float:
+    """One game. Returns White's score: 1.0, 0.5 or 0.0.
+
+    The two sides may be given different budgets, which is how you price what
+    extra thinking time is worth without simulating a whole clock.
+    """
+    budget = {chess.WHITE: ms_white or ms, chess.BLACK: ms_black or ms}
     board = chess.Board(fen)
     engines = {chess.WHITE: white, chess.BLACK: black}
     while True:
@@ -74,7 +123,8 @@ def play(white, black, fen: str, ms: float, ply_cap: int = 300) -> float:
                       for p, v in vals.items())
             return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
         eng = engines[board.turn]
-        ranked = eng.think(board.fen(), budget_ms=ms, hard_ms=ms * 3,
+        bms = budget[board.turn]
+        ranked = eng.think(board.fen(), budget_ms=bms, hard_ms=bms * 3,
                            game_ply=len(board.move_stack))
         if not ranked:
             return 0.0 if board.turn == chess.WHITE else 1.0
@@ -107,6 +157,12 @@ def main() -> None:
     ap.add_argument("b", type=Path, help="directory holding package `nbchess_b`")
     ap.add_argument("--games", type=int, default=100)
     ap.add_argument("--ms", type=float, default=60.0)
+    ap.add_argument("--ms-a", type=float, default=None,
+                    help="give A a different budget, to price extra thinking time")
+    ap.add_argument("--clock", action="store_true",
+                    help="play with real clocks and each side's own allocator")
+    ap.add_argument("--base-ms", type=float, default=120_000.0)
+    ap.add_argument("--inc-ms", type=float, default=500.0)
     ap.add_argument("--seed", type=int, default=17,
                     help="opening seed; change it for an independent sample")
     args = ap.parse_args()
@@ -116,6 +172,7 @@ def main() -> None:
     mod_b = load(args.b / "nbchess_b", "nbchess_b")
     ea = mod_a.Engine()
     eb = mod_b.Engine()
+    aa, ab_ = mod_a.allocate, mod_b.allocate
     print(f"both engines compiled in {time.perf_counter() - t:.0f}s", flush=True)
 
     fens = openings((args.games + 1) // 2, seed=args.seed)
@@ -125,7 +182,13 @@ def main() -> None:
         fen = fens[i // 2]
         a_is_white = i % 2 == 0
         w, bl = (ea, eb) if a_is_white else (eb, ea)
-        s = play(w, bl, fen, args.ms)
+        wa, ba = (aa, ab_) if a_is_white else (ab_, aa)
+        if args.clock:
+            s = play_clock(w, bl, wa, ba, fen, args.base_ms, args.inc_ms)
+        else:
+            a_ms = args.ms_a if args.ms_a is not None else args.ms
+            mw, mb = (a_ms, args.ms) if a_is_white else (args.ms, a_ms)
+            s = play(w, bl, fen, args.ms, ms_white=mw, ms_black=mb)
         a_score = s if a_is_white else 1.0 - s
         if a_score == 1.0:
             wins += 1

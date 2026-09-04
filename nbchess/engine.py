@@ -37,6 +37,15 @@ MAX_HISTORY = 512
 DEFAULT_OVERHEAD_MS = 200.0
 MOVES_TO_GO = 50
 
+#: Fraction of the projected time pool to spend on one move.
+#:
+#: Raised from 0.024 after two rated games showed us finishing with 54-82s of a
+#: 120s clock unspent. Measured: giving this engine 1.6x the thinking time is
+#: worth +85 +/- 71 Elo over 100 games, and the 300-ply worst case still
+#: survives with ~2s to spare. Real games run 65-86 plies, where the extra
+#: spending is never clawed back by a draining clock.
+SOFT_FRACTION = 0.038
+
 
 def move_to_uci(mv: int) -> str:
     frm = mv & 63
@@ -57,7 +66,7 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float) -> tu
     """
     usable = max(1.0, time_left_ms - overhead_ms)
     pool = time_left_ms + increment_ms * (MOVES_TO_GO - 1) - overhead_ms * (2 + MOVES_TO_GO)
-    soft = 0.024 * max(pool, increment_ms)
+    soft = SOFT_FRACTION * max(pool, increment_ms)
     soft = max(soft, min(0.6 * increment_ms, 0.5 * usable))
     hard = min(5.0 * soft, 0.75 * usable)
     soft = min(soft, hard)
