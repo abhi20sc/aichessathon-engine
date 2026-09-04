@@ -28,6 +28,8 @@ RFP_MARGIN = 75                   # per ply of depth, reverse futility  (tune)
 RFP_MAX_DEPTH = 8
 NMP_MIN_DEPTH = 3
 LMP_MAX_DEPTH = 8
+SEE_PRUNE_DEPTH = 6               # prune losing captures below this depth
+SEE_PRUNE_MARGIN = 100            # ...when they lose more than this per ply
 ASPIRATION_DELTA = 25
 
 #: LMR[depth][move_number]. Berserk's formula: 0.7844 + ln(d)*ln(m)/2.4696.

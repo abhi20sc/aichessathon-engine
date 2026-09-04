@@ -48,7 +48,7 @@ from .core import (
 )
 from .evaltables import MATERIAL
 from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
-from .tables import KNIGHT_ATT
+from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
 from .terms import (
     ADJACENT_FILES,
     FRONT_MASK,
@@ -87,6 +87,8 @@ from .tune import (
     INF,
     LMP,
     LMP_MAX_DEPTH,
+    SEE_PRUNE_DEPTH,
+    SEE_PRUNE_MARGIN,
     LMR,
     MATE,
     MATE_IN_MAX,
@@ -254,6 +256,60 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     if phase > int32(PHASE_MAX):
         phase = int32(PHASE_MAX)
     score = (mg * phase + eg * (int32(PHASE_MAX) - phase)) // int32(PHASE_MAX)
+
+    # ---- mop-up: drive a bare king to the edge (or the right corner) ----
+    # Piece-square tables alone leave KBB and KBN unfinished before the fifty-
+    # move rule intervenes. Once one side has only a king and the other has
+    # mating material, reward cornering the king and bringing ours close.
+    for side in range(2):
+        loser = uint64(1) - uint64(side)
+        if s[uint64(12) + loser] != s[loser * uint64(6) + uint64(5)]:
+            continue  # the other side still has more than a king
+        off = uint64(side) * uint64(6)
+        nb = int32(popcount(s[off + uint64(2)]))
+        nn = int32(popcount(s[off + uint64(1)]))
+        heavy = s[off + uint64(3)] | s[off + uint64(4)]
+        if heavy == uint64(0) and nb + nn < int32(2):
+            break  # no mating material at all
+        if heavy == uint64(0) and nb == int32(0):
+            break  # knights alone cannot force mate
+        wk = lsb(s[off + uint64(5)])
+        lk = lsb(s[loser * uint64(6) + uint64(5)])
+        lf = int32(lk & uint64(7))
+        lr = int32(lk >> uint64(3))
+        md = abs(int32(wk & uint64(7)) - lf) + abs(int32(wk >> uint64(3)) - lr)
+        if heavy == uint64(0) and nb == int32(1) and nn >= int32(1):
+            # bishop and knight: mate only in a corner of the bishop's colour
+            bsq = lsb(s[off + uint64(2)])
+            dark = ((int32(bsq & uint64(7)) + int32(bsq >> uint64(3))) & int32(1)) == int32(0)
+            if dark:
+                cd = min(lf + lr, (int32(7) - lf) + (int32(7) - lr))
+            else:
+                cd = min((int32(7) - lf) + lr, lf + (int32(7) - lr))
+            bonus = int32(5) * (int32(14) - cd)
+        else:
+            cf = lf if lf < int32(4) else int32(7) - lf
+            cr = lr if lr < int32(4) else int32(7) - lr
+            bonus = int32(10) * (int32(6) - cf - cr)
+        bonus += int32(4) * (int32(14) - md)
+        score += bonus if side == 0 else -bonus
+        break
+
+    # ---- drawish material: a lone minor, or two knights, cannot win ----
+    # Without this the engine happily trades down into KB v K "a bishop up".
+    strong = uint64(0) if score > int32(0) else uint64(1)
+    soff = strong * uint64(6)
+    if s[soff] == uint64(0):  # no pawns
+        heavy = s[soff + uint64(3)] | s[soff + uint64(4)]
+        if heavy == uint64(0):
+            nb = int32(popcount(s[soff + uint64(2)]))
+            nn = int32(popcount(s[soff + uint64(1)]))
+            if nb + nn <= int32(1):
+                score = score // int32(16)
+            elif nb == int32(0) and nn == int32(2):
+                weak = uint64(1) - strong
+                if s[uint64(12) + weak] == s[weak * uint64(6) + uint64(5)]:
+                    score = score // int32(16)
     return score if s[14] == uint64(0) else -score
 
 
@@ -346,6 +402,106 @@ def from_tt(v: np.int32, ply: int) -> np.int32:
     return v
 
 
+
+SEE_VALUE = np.array([100, 300, 300, 500, 900, 0], dtype=np.int32)
+
+
+@njit(boolean(uint64[:], int8[:], uint32, int32), cache=False, nogil=True)
+def see_ge(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8], mv: np.uint32,
+           threshold: np.int32) -> bool:
+    """Static exchange evaluation: does playing `mv` and letting both sides
+    capture on the target square, least valuable attacker first, come out at
+    least `threshold` ahead? Pins are ignored, as in most engines.
+
+    The swap-list formulation follows Stockfish: `swap` is the running balance
+    from the point of view of the side whose turn it is to recapture, and the
+    loop breaks as soon as either side would lose by continuing.
+    """
+    frm = uint64(mv & uint32(63))
+    to = uint64((mv >> uint32(6)) & uint32(63))
+    flag = (mv >> uint32(15)) & uint32(7)
+    if flag == uint32(2):                       # castling never loses material
+        return threshold <= int32(0)
+    victim = int64(mb[to])
+    if flag == uint32(1):
+        swap = SEE_VALUE[0] - threshold         # en passant takes a pawn
+    elif victim == 12:
+        swap = -threshold
+    else:
+        swap = SEE_VALUE[victim % 6] - threshold
+    if swap < int32(0):
+        return False
+    attacker = int64(mb[frm]) % 6
+    swap = SEE_VALUE[attacker] - swap
+    if swap <= int32(0):
+        return True
+
+    occ = (s[12] | s[13]) ^ (uint64(1) << frm)
+    occ |= uint64(1) << to
+    if flag == uint32(1):
+        occ ^= uint64(1) << (to ^ uint64(8))
+    stm = s[14]
+    bq = s[2] | s[4] | s[8] | s[10]
+    rq = s[3] | s[4] | s[9] | s[10]
+    attackers = ((PAWN_ATT[1, to] & s[0]) | (PAWN_ATT[0, to] & s[6])
+                 | (KNIGHT_ATT[to] & (s[1] | s[7]))
+                 | (KING_ATT[to] & (s[5] | s[11]))
+                 | (bishop_att(to, occ) & bq)
+                 | (rook_att(to, occ) & rq))
+    res = int32(1)
+    while True:
+        stm = uint64(1) - stm
+        attackers &= occ
+        mine = attackers & s[uint64(12) + stm]
+        if mine == uint64(0):
+            break
+        res ^= int32(1)
+        off = stm * uint64(6)
+        bb = mine & s[off]
+        if bb != uint64(0):
+            swap = SEE_VALUE[0] - swap
+            if swap < res:
+                break
+            occ ^= bb & (uint64(0) - bb)
+            attackers |= bishop_att(to, occ) & bq
+            continue
+        bb = mine & s[off + uint64(1)]
+        if bb != uint64(0):
+            swap = SEE_VALUE[1] - swap
+            if swap < res:
+                break
+            occ ^= bb & (uint64(0) - bb)
+            continue
+        bb = mine & s[off + uint64(2)]
+        if bb != uint64(0):
+            swap = SEE_VALUE[2] - swap
+            if swap < res:
+                break
+            occ ^= bb & (uint64(0) - bb)
+            attackers |= bishop_att(to, occ) & bq
+            continue
+        bb = mine & s[off + uint64(3)]
+        if bb != uint64(0):
+            swap = SEE_VALUE[3] - swap
+            if swap < res:
+                break
+            occ ^= bb & (uint64(0) - bb)
+            attackers |= rook_att(to, occ) & rq
+            continue
+        bb = mine & s[off + uint64(4)]
+        if bb != uint64(0):
+            swap = SEE_VALUE[4] - swap
+            if swap < res:
+                break
+            occ ^= bb & (uint64(0) - bb)
+            attackers |= (bishop_att(to, occ) & bq) | (rook_att(to, occ) & rq)
+            continue
+        # only the king is left: it may capture only if nothing defends
+        if (attackers & ~s[uint64(12) + stm]) != uint64(0):
+            return (res ^ int32(1)) != int32(0)
+        return res != int32(0)
+    return res != int32(0)
+
 @njit(boolean(uint64[:]), forceinline=True, cache=False, nogil=True)
 def has_non_pawn(s: npt.NDArray[np.uint64]) -> bool:
     """Null move is unsound in zugzwang, which is a pawn-endgame phenomenon."""
@@ -380,9 +536,13 @@ def score_moves(
         to = (mv >> uint32(6)) & uint32(63)
         promo = (mv >> uint32(12)) & uint32(7)
         victim = mb[to]
+        if victim == 12 and ((mv >> uint32(15)) & uint32(7)) == uint32(1):
+            victim = np.int8(0)                 # en passant captures a pawn
         sc = int32(0)
         if victim != 12:
-            sc = int32(1_000_000) + int32(10) * MATERIAL[victim % 6] - MATERIAL[mb[frm] % 6]
+            sc = int32(10) * MATERIAL[victim % 6] - MATERIAL[mb[frm] % 6]
+            # a capture that loses the exchange goes after every quiet move
+            sc += int32(1_000_000) if see_ge(s, mb, mv, int32(0)) else int32(-1_000_000)
         elif promo != uint32(0):
             sc = int32(1_500_000) + MATERIAL[promo]
         elif mv == killers[ply, 0]:
@@ -475,6 +635,8 @@ def quiesce(
         frm = mv & uint32(63)
         promo = (mv >> uint32(12)) & uint32(7)
         victim = mbs[ply][to]
+        if victim == 12 and ((mv >> uint32(15)) & uint32(7)) == uint32(1):
+            victim = np.int8(0)
         if victim != 12:
             sbuf[ply][i] = (int32(1_000_000) + int32(10) * MATERIAL[victim % 6]
                             - MATERIAL[mbs[ply][frm] % 6])
@@ -494,6 +656,9 @@ def quiesce(
         victim = mbs[ply][to]
         gain = MATERIAL[victim % 6] if victim != 12 else int32(0)
         if stand + gain + int32(200) < alpha:
+            continue
+        # a losing capture cannot rescue a quiet position
+        if not see_ge(s, mbs[ply], mv, int32(0)):
             continue
         if not make(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
@@ -638,13 +803,19 @@ def negamax(
         pick_best(buf[ply], sbuf[ply], i, n)
         mv = buf[ply][i]
         to = (mv >> uint32(6)) & uint32(63)
-        is_quiet = mbs[ply][to] == 12 and ((mv >> uint32(12)) & uint32(7)) == uint32(0)
+        is_quiet = (mbs[ply][to] == 12 and ((mv >> uint32(12)) & uint32(7)) == uint32(0)
+                    and ((mv >> uint32(15)) & uint32(7)) != uint32(1))
+        bad_capture = sbuf[ply][i] < int32(-500_000)
 
-        # late move pruning: enough quiet moves tried, and none of them helped
-        if (not is_pv and not in_check and is_quiet and best > int32(-MATE_IN_MAX)
-                and depth <= LMP_MAX_DEPTH
-                and quiets >= LMP[1 if improving else 0, depth]):
-            continue
+        if not is_pv and not in_check and best > int32(-MATE_IN_MAX):
+            # late move pruning: enough quiet moves tried, and none of them helped
+            if (is_quiet and depth <= LMP_MAX_DEPTH
+                    and quiets >= LMP[1 if improving else 0, depth]):
+                continue
+            # a capture that loses more than the depth could win back
+            if (bad_capture and depth <= SEE_PRUNE_DEPTH
+                    and not see_ge(s, mbs[ply], mv, int32(-SEE_PRUNE_MARGIN * depth))):
+                continue
 
         if not make(s, mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
@@ -655,7 +826,7 @@ def negamax(
 
         # ---- late move reductions ----
         r = 0
-        if depth >= 3 and legal > 2 and is_quiet:
+        if depth >= 3 and legal > 2 and (is_quiet or bad_capture):
             dd = depth if depth < 63 else 63
             mm = legal if legal < 63 else 63
             r = int64(LMR[dd, mm])
@@ -664,6 +835,8 @@ def negamax(
             if improving:
                 r -= 1
             if mv == killers[ply, 0] or mv == killers[ply, 1]:
+                r -= 1
+            if bad_capture:
                 r -= 1
             if r < 0:
                 r = 0

@@ -93,7 +93,7 @@ class Engine:
         self.rep = np.zeros(MAX_HISTORY + MAX_PLY, dtype=np.uint64)
         self.evals = np.zeros(MAX_PLY, dtype=np.int32)
 
-        self.ctl = np.zeros(8, dtype=np.int64)
+        self.ctl = np.zeros(12, dtype=np.int64)
         self.tbuf = new_timebuf()
         self.out_moves = np.zeros(MAX_ROOT_MOVES, dtype=np.uint32)
         self.out_scores = np.zeros(MAX_ROOT_MOVES, dtype=np.int32)
