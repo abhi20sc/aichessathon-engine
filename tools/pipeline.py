@@ -20,6 +20,7 @@ including positions annotated by an existing engine. Nothing here ships.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import time
 from pathlib import Path
@@ -27,7 +28,9 @@ from pathlib import Path
 import chess
 import chess.engine
 
-STOCKFISH = "/usr/games/stockfish"
+#: Reference engine for playing and labelling; override to run the pipeline
+#: on another machine (it is never part of the submission).
+STOCKFISH = os.environ.get("STOCKFISH", "/usr/games/stockfish")
 CLIP_CP = 1500
 
 
