@@ -87,6 +87,9 @@ from .tune import (
     INF,
     LMP,
     LMP_MAX_DEPTH,
+    FUTILITY_DEPTH,
+    FUTILITY_IMPROVING,
+    FUTILITY_MARGIN,
     SEE_PRUNE_DEPTH,
     SEE_PRUNE_MARGIN,
     LMR,
@@ -812,6 +815,11 @@ def negamax(
             if (is_quiet and depth <= LMP_MAX_DEPTH
                     and quiets >= LMP[1 if improving else 0, depth]):
                 continue
+            # futility: a quiet move cannot lift a hopeless static score to alpha
+            if (is_quiet and depth <= FUTILITY_DEPTH
+                    and static + int32(FUTILITY_MARGIN) * int32(depth)
+                    + (int32(FUTILITY_IMPROVING) if improving else int32(0)) <= alpha):
+                continue
             # a capture that loses more than the depth could win back
             if (bad_capture and depth <= SEE_PRUNE_DEPTH
                     and not see_ge(s, mbs[ply], mv, int32(-SEE_PRUNE_MARGIN * depth))):
@@ -886,14 +894,17 @@ def negamax(
              else uint8(BOUND_EXACT) if best > old_alpha
              else uint8(BOUND_UPPER))
     # depth-preferred replacement, but an exact-key match always wins its slot
-    replace = (tt_key[idx] != key or int64(tt_depth[idx]) <= depth
+    same_key = tt_key[idx] == key
+    replace = (not same_key or int64(tt_depth[idx]) <= depth
                or bound == uint8(BOUND_EXACT))
     if replace:
         tt_key[idx] = key
         tt_score[idx] = int16(to_tt(best, ply))
         tt_depth[idx] = int8(depth)
         tt_bound[idx] = bound
-        if bound != uint8(BOUND_UPPER) or tt_key[idx] != key:
+        # a fail-low has no move worth keeping over one already stored here,
+        # but a slot taken from another position must not keep its stale move
+        if bound != uint8(BOUND_UPPER) or not same_key:
             tt_move[idx] = best_move
     return best
 
