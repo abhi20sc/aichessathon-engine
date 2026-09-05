@@ -30,12 +30,15 @@ if USE_NNUE:
         B2 = float(_z["b2"])
         #: A residual net corrects the hand evaluation instead of replacing it.
         RESIDUAL = bool(int(_z["residual"])) if "residual" in _z else False
+        #: Multiplier on the network's output; below 1 damps a noisy net.
+        OUT_SCALE = float(_z["scale"]) if "scale" in _z else 1.0
 else:  # placeholders so the module still compiles; never used
     W1 = np.zeros((769, 8), dtype=np.float32)
     B1 = np.zeros(8, dtype=np.float32)
     W2 = np.zeros(16, dtype=np.float32)
     B2 = 0.0
     RESIDUAL = False
+    OUT_SCALE = 1.0
 HIDDEN = int(B1.shape[0])
 
 
@@ -68,6 +71,7 @@ def nn_eval(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
             u = min(max(acc_b[i], float32(0.0)), float32(1.0))
             t = min(max(acc_w[i], float32(0.0)), float32(1.0))
             out += W2[i] * u + W2[HIDDEN + i] * t
+    out *= float32(OUT_SCALE)
     if out > float32(3000.0):
         out = float32(3000.0)
     if out < float32(-3000.0):
