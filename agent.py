@@ -164,9 +164,14 @@ class Ponderer:
         self.thread = None
 
 
+#: Rules frozen on 5 September: the process is suspended while the opponent
+#: thinks, so nothing done between our own moves ever runs. Pondering is kept
+#: as code but switched off; it would only start a thread to be frozen.
+PONDER = False
+
 _tracker = GameTracker()
 _overhead_ms = INITIAL_OVERHEAD_MS
-_ponderer = Ponderer(_engine) if _engine is not None else None
+_ponderer = Ponderer(_engine) if (_engine is not None and PONDER) else None
 
 
 def _choose(board: chess.Board, ranked: list[tuple[str, int]]) -> str | None:
