@@ -41,6 +41,8 @@ def main() -> None:
     ap.add_argument("--play-nodes", type=int, default=6000)
     ap.add_argument("--label-nodes", type=int, default=15000)
     ap.add_argument("--per-game", type=int, default=8)
+    ap.add_argument("--late-weight", type=float, default=0.0,
+                    help="3.0 makes the last position four times as likely as the first")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
 
@@ -78,9 +80,16 @@ def main() -> None:
                 board.push(mv)
             result = {"1-0": 1.0, "0-1": 0.0}.get(board.result(claim_draw=True), 0.5)
 
-            # sparse sample: correlated labels within a game are worth little
+            # sparse sample: correlated labels within a game are worth little.
+            # Weighted toward the late game: endgames are where the hand
+            # evaluation is weakest, and a uniform sample under-represents them.
             if len(candidates) > args.per_game:
-                candidates = rng.sample(candidates, args.per_game)
+                weights = [1.0 + args.late_weight * i / len(candidates)
+                           for i in range(len(candidates))]
+                picked: set[int] = set()
+                while len(picked) < args.per_game:
+                    picked.add(rng.choices(range(len(candidates)), weights)[0])
+                candidates = [candidates[i] for i in sorted(picked)]
             for fen in candidates:
                 info = labeller.analyse(chess.Board(fen), label_lim)
                 cp = info["score"].white().score(mate_score=CLIP_CP * 2)

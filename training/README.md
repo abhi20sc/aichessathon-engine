@@ -29,7 +29,9 @@ Loss: sigmoid (Texel K = 0.9) with a 0.7 / 0.3 blend of engine label and
 game result; AdamW, weight decay 1e-4, batch 8192, lr 2e-3, 20 epochs, best
 holdout epoch kept. Holdout is the last 5% of rows.
 
-## Runs (the shipped net)
+## Runs
+
+### v4 net (5 Sep morning)
 
 Three seeds on the same 740,151 positions, logs in this directory:
 
@@ -47,4 +49,12 @@ net with halved output weights) and writes it as `.safetensors`, which
 `nbchess/nnue.py` reads with numpy alone.
 
 Match result at 60 ms/move, 600 games, both colours from the same openings:
-**+40 +/- 28 Elo** over the v3 engine without the net.
+**+40 +/- 28 Elo** over the v3 engine without the net; +42 +/- 70 at 400 ms.
+
+### v5 net (5 Sep midday) - the shipped net
+
+Same recipe on 876,397 positions (the three laptop files at 08:45 UTC),
+seeds 1 and 2 (`train_r2_s1.log`, `train_r2_s2.log`; holdout 0.013818 and
+0.013905), ensembled the same way. On a fresh 43,820-position holdout the
+pair scores 0.00970 against 0.01669 for the v4 pair (hand evaluation
+0.02093). Match result: **+33 +/- 40** over the v4 net, 300 games at 60 ms.

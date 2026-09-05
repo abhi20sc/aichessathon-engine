@@ -94,8 +94,11 @@ class Engine:
         self.tt_depth = np.zeros(TT_SIZE, dtype=np.int8)
         self.tt_bound = np.zeros(TT_SIZE, dtype=np.uint8)
 
-        self.killers = np.zeros((MAX_PLY, 2), dtype=np.uint32)
+        # two killers per ply, plus the move made at that ply (what the child replies to)
+        self.killers = np.zeros((MAX_PLY, 3), dtype=np.uint32)
         self.history = np.zeros((2, 64, 64), dtype=np.int32)
+        # the quiet reply that last refuted [side to move, from, to]
+        self.counter = np.zeros((2, 64, 64), dtype=np.uint32)
         self.rep = np.zeros(MAX_HISTORY + MAX_PLY, dtype=np.uint64)
         self.evals = np.zeros(MAX_PLY, dtype=np.int32)
 
@@ -123,6 +126,7 @@ class Engine:
         self.tt_bound[:] = 0
         self.history[:] = 0
         self.killers[:] = 0
+        self.counter[:] = 0
 
     def abort(self) -> None:
         """Raise the kernel's stop flag from another thread. The search polls
@@ -186,7 +190,7 @@ class Engine:
                 count = search_root(
                     self.stack, self.mbs, self.buf, self.sbuf,
                     self.tt_key, self.tt_move, self.tt_score, self.tt_depth, self.tt_bound,
-                    self.killers, self.history, self.rep, self.evals,
+                    self.killers, self.history, self.counter, self.rep, self.evals,
                     depth, alpha, beta, self.ctl, self.tbuf,
                     self.out_moves, self.out_scores, self.acc)
                 if count <= 0 or self.ctl[C_STOPPED] == 1:

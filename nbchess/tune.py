@@ -48,6 +48,7 @@ for _d in range(LMP_MAX_DEPTH + 1):
     LMP[1, _d] = int(3 + _d * _d)
 
 HISTORY_MAX = 16384
+IIR_MIN_DEPTH = 4     # internal iterative reduction: no hash move at this depth or more
 
 #: The referee stops the game at this many plies and awards it on raw material,
 #: using its own scale - not on our evaluation.

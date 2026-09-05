@@ -103,6 +103,7 @@ from .tune import (
     FUTILITY_IMPROVING,
     FUTILITY_MARGIN,
     HISTORY_MAX,
+    IIR_MIN_DEPTH,
     INF,
     LMP,
     LMP_MAX_DEPTH,
@@ -195,9 +196,10 @@ def endgame_adjust(s: npt.NDArray[np.uint64], score: np.int32) -> np.int32:
 
 
 @njit(int32(uint64[:], int8[:], _W_RO), cache=False, nogil=True)
-def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
-               w: npt.NDArray[np.int32]) -> np.int32:
-    """Tapered evaluation: material and piece-square tables, plus mobility,
+def evaluate_raw(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
+                 w: npt.NDArray[np.int32]) -> np.int32:
+    """Tapered evaluation in WHITE's view, before the endgame corrections:
+    material and piece-square tables, plus mobility,
     pawn structure, king safety and the bishop pair.
 
     Two scores are accumulated - one weighted for the middlegame, one for the
@@ -304,7 +306,8 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
                     ek = lsb(s[(uint64(1) - uint64(side)) * uint64(6) + uint64(5)])
                     d_own = max(abs(int32(ok & uint64(7)) - sf), abs(int32(ok >> uint64(3)) - sr))
                     d_enemy = max(abs(int32(ek & uint64(7)) - sf), abs(int32(ek >> uint64(3)) - sr))
-                    eg += sign * int32(rel) * (w[I_PK_ENEMY] * d_enemy - w[I_PK_OWN] * d_own) // int32(4)
+                    pk = w[I_PK_ENEMY] * d_enemy - w[I_PK_OWN] * d_own
+                    eg += sign * int32(rel) * pk // int32(4)
             if (ADJACENT_FILES[f] & pawns) == uint64(0):
                 mg += sign * w[I_ISO_MG]
                 eg += sign * w[I_ISO_EG]
@@ -400,8 +403,15 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     if phase > int32(PHASE_MAX):
         phase = int32(PHASE_MAX)
     score = (mg * phase + eg * (int32(PHASE_MAX) - phase)) // int32(PHASE_MAX)
+    return score
 
-    score = endgame_adjust(s, score)
+
+@njit(int32(uint64[:], int8[:], _W_RO), cache=False, nogil=True)
+def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
+               w: npt.NDArray[np.int32]) -> np.int32:
+    """The hand evaluation from the side to move's view, endgame corrections
+    applied."""
+    score = endgame_adjust(s, evaluate_raw(s, mb, w))
     return score if s[14] == uint64(0) else -score
 
 
@@ -413,9 +423,11 @@ def evaluate_acc(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     so the branch not taken costs nothing."""
     if USE_NNUE:
         sc = nn_output(s[14], acc)                 # side to move's view
-        if NN_RESIDUAL:
-            return sc + evaluate_w(s, mb, WEIGHTS)
         white = sc if s[14] == uint64(0) else -sc
+        if NN_RESIDUAL:
+            white += evaluate_raw(s, mb, WEIGHTS)
+        # mop-up and drawn-material scaling apply to the whole evaluation,
+        # so a bare bishop stays a draw whatever the network adds
         white = endgame_adjust(s, white)
         return white if s[14] == uint64(0) else -white
     return evaluate_w(s, mb, WEIGHTS)
@@ -427,9 +439,9 @@ def evaluate(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
     search uses evaluate_acc."""
     if USE_NNUE:
         sc = nn_eval(s, mb)
-        if NN_RESIDUAL:
-            return sc + evaluate_w(s, mb, WEIGHTS)
         white = sc if s[14] == uint64(0) else -sc
+        if NN_RESIDUAL:
+            white += evaluate_raw(s, mb, WEIGHTS)
         white = endgame_adjust(s, white)
         return white if s[14] == uint64(0) else -white
     return evaluate_w(s, mb, WEIGHTS)
@@ -630,7 +642,7 @@ def has_non_pawn(s: npt.NDArray[np.uint64]) -> bool:
 
 
 @njit(int64(uint64[:], int8[:], uint32[:], int32[:], int64, uint32, uint32[:, :],
-            int32[:, :, :], int64), cache=False, nogil=True)
+            int32[:, :, :], int64, uint32), cache=False, nogil=True)
 def score_moves(
         s: npt.NDArray[np.uint64],
         mb: npt.NDArray[np.int8],
@@ -641,8 +653,10 @@ def score_moves(
         killers: npt.NDArray[np.uint32],
         history: npt.NDArray[np.int32],
         ply: int,
+        counter_mv: np.uint32,
 ) -> int:
-    """Assign an ordering score to each generated move."""
+    """Assign an ordering score to each generated move. `counter_mv` is the
+    quiet move that last refuted the opponent's previous move."""
     us = int64(s[14])
     for i in range(n):
         mv = moves[i]
@@ -666,6 +680,8 @@ def score_moves(
             sc = int32(900_000)
         elif mv == killers[ply, 1]:
             sc = int32(800_000)
+        elif mv == counter_mv and mv != uint32(0):
+            sc = int32(700_000)
         else:
             sc = history[us, frm, to]
         if promo != uint32(0) and victim != 12:
@@ -794,11 +810,13 @@ def quiesce(
     return best
 
 
-@njit(int64(int64, int64, boolean, boolean, boolean, boolean), cache=False, nogil=True)
+@njit(int64(int64, int64, boolean, boolean, boolean, boolean, int32), cache=False, nogil=True)
 def lmr_reduction(depth: int, legal: int, is_pv: bool, improving: bool,
-                  is_killer: bool, bad_capture: bool) -> int:
+                  is_killer: bool, bad_capture: bool, hist: np.int32) -> int:
     """How many plies to take off a late move. Kept out of negamax so the
-    search kernel stays small enough to compile inside the init budget."""
+    search kernel stays small enough to compile inside the init budget.
+    A quiet move with a strong history is reduced less; one that has
+    repeatedly failed, more."""
     dd = depth if depth < 63 else 63
     mm = legal if legal < 63 else 63
     r = int64(LMR[dd, mm])
@@ -810,6 +828,7 @@ def lmr_reduction(depth: int, legal: int, is_pv: bool, improving: bool,
         r -= 1
     if bad_capture:
         r -= 1
+    r -= int64(hist) // int64(HISTORY_MAX // 2)
     if r < 0:
         r = 0
     if r > depth - 2:
@@ -817,16 +836,21 @@ def lmr_reduction(depth: int, legal: int, is_pv: bool, improving: bool,
     return r
 
 
-@njit(int64(uint32[:, :], int32[:, :, :], uint32[:], int64, int64, uint32, int64, int64),
-      cache=False, nogil=True)
+@njit(int64(uint32[:, :], int32[:, :, :], uint32[:, :, :], uint32[:], int64, int64, uint32,
+            int64, int64), cache=False, nogil=True)
 def on_cutoff(killers: npt.NDArray[np.uint32], history: npt.NDArray[np.int32],
-              quiet_list: npt.NDArray[np.uint32], ply: int, us: int, mv: np.uint32,
-              depth: int, quiets: int) -> int:
-    """A quiet move refuted the position: remember it, and mark down the
+              counter: npt.NDArray[np.uint32], quiet_list: npt.NDArray[np.uint32],
+              ply: int, us: int, mv: np.uint32, depth: int, quiets: int) -> int:
+    """A quiet move refuted the position: remember it as a killer for this
+    ply and as the counter to the opponent's previous move, and mark down the
     quiets tried before it."""
     if killers[ply, 0] != mv:
         killers[ply, 1] = killers[ply, 0]
         killers[ply, 0] = mv
+    if ply > 0:
+        prev = killers[ply - 1, 2]
+        if prev != uint32(0):
+            counter[us, prev & uint32(63), (prev >> uint32(6)) & uint32(63)] = mv
     bonus = int32(depth * depth * 16)
     hist_update(history, us, mv, bonus)
     for q in range(quiets - 1):
@@ -859,7 +883,7 @@ def tt_store(tt_key: npt.NDArray[np.uint64], tt_move: npt.NDArray[np.uint32],
 
 @njit(int32(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
             uint64[:], uint32[:], int16[:], int8[:], uint8[:],
-            uint32[:, :], int32[:, :, :], uint64[:], int32[:],
+            uint32[:, :], int32[:, :, :], uint32[:, :, :], uint64[:], int32[:],
             int64, int64, int32, int32, boolean, int64[:], int64[::1],
             float32[:, :, ::1]), cache=False, nogil=True)
 def negamax(
@@ -874,6 +898,7 @@ def negamax(
         tt_bound: npt.NDArray[np.uint8],
         killers: npt.NDArray[np.uint32],
         history: npt.NDArray[np.int32],
+        counter: npt.NDArray[np.uint32],
         rep: npt.NDArray[np.uint64],
         evals: npt.NDArray[np.int32],
         ply: int,
@@ -950,6 +975,11 @@ def negamax(
         if b == uint8(BOUND_UPPER) and v <= alpha:
             return v
 
+    # internal iterative reduction: with no hash move the ordering is poor,
+    # so search a ply shallower and let the next iteration fix it up
+    if depth >= IIR_MIN_DEPTH and tt_mv == uint32(0) and not in_check:
+        depth -= 1
+
     static = eval_adjusted(s, mbs[ply], acc[ply], ctl[C_GAMEPLY] + ply)
     evals[ply] = static
     improving = (not in_check) and ply >= 2 and static > evals[ply - 2]
@@ -966,18 +996,24 @@ def negamax(
             if d < 0:
                 d = 0
             make_null(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1])
+            killers[ply, 2] = uint32(0)          # no move to counter
             if USE_NNUE:
                 acc_copy(acc[ply], acc[ply + 1])
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, rep, evals, ply + 1, d,
+                          tt_bound, killers, history, counter, rep, evals, ply + 1, d,
                           -beta, -beta + int32(1), False, ctl, tbuf, acc)
             if ctl[C_STOPPED] == 1:
                 return int32(0)
             if sc >= beta:
                 return beta if sc >= int32(MATE_IN_MAX) else sc
 
+    counter_mv = uint32(0)
+    if ply > 0:
+        prev = killers[ply - 1, 2]
+        if prev != uint32(0):
+            counter_mv = counter[us, prev & uint32(63), (prev >> uint32(6)) & uint32(63)]
     n = gen_moves(s, mbs[ply], buf[ply])
-    score_moves(s, mbs[ply], buf[ply], sbuf[ply], n, tt_mv, killers, history, ply)
+    score_moves(s, mbs[ply], buf[ply], sbuf[ply], n, tt_mv, killers, history, ply, counter_mv)
 
     old_alpha = alpha
     best = int32(-INF)
@@ -1011,6 +1047,7 @@ def negamax(
 
         if not make(s, mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
+        killers[ply, 2] = mv                     # what the child is replying to
         if USE_NNUE:
             acc_update(acc[ply], acc[ply + 1], mbs[ply], us, mv)
         legal += 1
@@ -1021,25 +1058,27 @@ def negamax(
         # ---- late move reductions ----
         r = 0
         if depth >= 3 and legal > 2 and (is_quiet or bad_capture):
+            hist = history[us, mv & uint32(63), to] if is_quiet else int32(0)
             r = lmr_reduction(depth, legal, is_pv, improving,
-                              mv == killers[ply, 0] or mv == killers[ply, 1], bad_capture)
+                              mv == killers[ply, 0] or mv == killers[ply, 1] or mv == counter_mv,
+                              bad_capture, hist)
 
         # ---- principal variation search ----
         if legal == 1:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, rep, evals, ply + 1, depth - 1,
+                          tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1,
                           -beta, -alpha, is_pv, ctl, tbuf, acc)
         else:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, rep, evals, ply + 1, depth - 1 - r,
+                          tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1 - r,
                           -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if sc > alpha and r > 0:          # reduced search beat alpha: verify
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, rep, evals, ply + 1, depth - 1,
+                              tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1,
                               -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if is_pv and sc > alpha and sc < beta:
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, rep, evals, ply + 1, depth - 1,
+                              tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1,
                               -beta, -alpha, True, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return int32(0)
@@ -1051,7 +1090,8 @@ def negamax(
             alpha = sc
         if alpha >= beta:
             if is_quiet:
-                on_cutoff(killers, history, quiet_list, ply, int64(us), mv, depth, quiets)
+                on_cutoff(killers, history, counter, quiet_list, ply, int64(us), mv, depth,
+                          quiets)
             break
 
     if legal == 0:
@@ -1067,7 +1107,7 @@ def negamax(
 
 @njit(int64(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
             uint64[:], uint32[:], int16[:], int8[:], uint8[:],
-            uint32[:, :], int32[:, :, :], uint64[:], int32[:],
+            uint32[:, :], int32[:, :, :], uint32[:, :, :], uint64[:], int32[:],
             int64, int32, int32, int64[:], int64[::1], uint32[:], int32[:],
             float32[:, :, ::1]), cache=False, nogil=True)
 def search_root(
@@ -1082,6 +1122,7 @@ def search_root(
         tt_bound: npt.NDArray[np.uint8],
         killers: npt.NDArray[np.uint32],
         history: npt.NDArray[np.int32],
+        counter: npt.NDArray[np.uint32],
         rep: npt.NDArray[np.uint64],
         evals: npt.NDArray[np.int32],
         depth: int,
@@ -1102,7 +1143,7 @@ def search_root(
     tt_mv = tt_move[idx] if tt_key[idx] == key else uint32(0)
 
     n = gen_moves(s, mbs[0], buf[0])
-    score_moves(s, mbs[0], buf[0], sbuf[0], n, tt_mv, killers, history, 0)
+    score_moves(s, mbs[0], buf[0], sbuf[0], n, tt_mv, killers, history, 0, uint32(0))
 
     best = int32(-INF)
     best_move = uint32(0)
@@ -1112,19 +1153,20 @@ def search_root(
         mv = buf[0][i]
         if not make(s, mbs[0], stack[1], mbs[1], mv):
             continue
+        killers[0, 2] = mv
         if USE_NNUE:
             acc_update(acc[0], acc[1], mbs[0], s[14], mv)
         if count == 0:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, rep, evals, 1, depth - 1,
+                          tt_bound, killers, history, counter, rep, evals, 1, depth - 1,
                           -beta, -alpha, True, ctl, tbuf, acc)
         else:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, rep, evals, 1, depth - 1,
+                          tt_bound, killers, history, counter, rep, evals, 1, depth - 1,
                           -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if sc > alpha:
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, rep, evals, 1, depth - 1,
+                              tt_bound, killers, history, counter, rep, evals, 1, depth - 1,
                               -beta, -alpha, True, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return -count if count > 0 else 0
