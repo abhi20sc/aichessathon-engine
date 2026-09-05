@@ -60,7 +60,7 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     Rated games here run 40 to 100 moves and are decided as often in a queen
     ending as in the opening; the geometric scheme this replaces spent 5 s a
     move early and was down to 1 s a move by move 40 in every long game,
-    which is where round 21 let a won position go (Stockfish +1.7 to 0.0 in
+    which is where round 21 let a won position go (from +1.7 to 0.0 in
     six moves played at about a second each with 27 s on the clock).
     """
     usable = max(1.0, time_left_ms - overhead_ms)
