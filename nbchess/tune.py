@@ -49,6 +49,8 @@ for _d in range(LMP_MAX_DEPTH + 1):
 
 HISTORY_MAX = 16384
 IIR_MIN_DEPTH = 4     # internal iterative reduction: no hash move at this depth or more
+SE_MIN_DEPTH = 8      # singular extension: probe the hash move from this depth
+SE_MARGIN = 2         # ... with a window this many centipawns per ply below its score
 
 #: The referee stops the game at this many plies and awards it on raw material,
 #: using its own scale - not on our evaluation.

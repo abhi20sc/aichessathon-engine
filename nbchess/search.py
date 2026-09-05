@@ -115,6 +115,8 @@ from .tune import (
     REF_VALUES,
     RFP_MARGIN,
     RFP_MAX_DEPTH,
+    SE_MARGIN,
+    SE_MIN_DEPTH,
     SEE_PRUNE_DEPTH,
     SEE_PRUNE_MARGIN,
     TT_MASK,
@@ -962,8 +964,11 @@ def negamax(
         return quiesce(stack, mbs, buf, sbuf, ply, alpha, beta, ctl, tbuf, acc)
 
     # ---- transposition table ----
+    # A singular-extension probe searches this same position with one move
+    # excluded; the table must then neither answer for it nor learn from it.
+    excluded = killers[ply, 3]
     idx = key & uint64(TT_MASK)
-    tt_hit = tt_key[idx] == key
+    tt_hit = tt_key[idx] == key and excluded == uint32(0)
     tt_mv = tt_move[idx] if tt_hit else uint32(0)
     if tt_hit and not is_pv and int64(tt_depth[idx]) >= depth:
         v = from_tt(int32(tt_score[idx]), ply)
@@ -984,7 +989,7 @@ def negamax(
     evals[ply] = static
     improving = (not in_check) and ply >= 2 and static > evals[ply - 2]
 
-    if not is_pv and not in_check:
+    if not is_pv and not in_check and excluded == uint32(0):
         # reverse futility: so far above beta that the opponent cannot claw back
         if depth <= RFP_MAX_DEPTH and static - int32(RFP_MARGIN) * int32(depth) >= beta:
             return static
@@ -1007,6 +1012,26 @@ def negamax(
             if sc >= beta:
                 return beta if sc >= int32(MATE_IN_MAX) else sc
 
+    # ---- singular extension ----
+    # If the hash move is far better than every alternative at a reduced
+    # depth, it is the only move worth anything here: search it one ply
+    # deeper, so the line the whole search rests on is seen further.
+    extension = 0
+    if (depth >= SE_MIN_DEPTH and excluded == uint32(0) and tt_hit and tt_mv != uint32(0)
+            and tt_bound[idx] != uint8(BOUND_UPPER) and int64(tt_depth[idx]) >= depth - 3):
+        tt_v = from_tt(int32(tt_score[idx]), ply)
+        if abs(tt_v) < int32(MATE_IN_MAX):
+            sbeta = tt_v - int32(SE_MARGIN) * int32(depth)
+            killers[ply, 3] = tt_mv
+            sv = negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
+                         tt_bound, killers, history, counter, rep, evals, ply, (depth - 1) // 2,
+                         sbeta - int32(1), sbeta, False, ctl, tbuf, acc)
+            killers[ply, 3] = uint32(0)
+            if ctl[C_STOPPED] == 1:
+                return int32(0)
+            if sv < sbeta:
+                extension = 1
+
     counter_mv = uint32(0)
     if ply > 0:
         prev = killers[ply - 1, 2]
@@ -1025,6 +1050,8 @@ def negamax(
     for i in range(n):
         pick_best(buf[ply], sbuf[ply], i, n)
         mv = buf[ply][i]
+        if mv == excluded:
+            continue
         to = (mv >> uint32(6)) & uint32(63)
         is_quiet = (mbs[ply][to] == 12 and ((mv >> uint32(12)) & uint32(7)) == uint32(0)
                     and ((mv >> uint32(15)) & uint32(7)) != uint32(1))
@@ -1047,6 +1074,7 @@ def negamax(
 
         if not make(s, mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
+        new_depth = depth - 1 + (extension if mv == tt_mv else 0)
         killers[ply, 2] = mv                     # what the child is replying to
         if USE_NNUE:
             acc_update(acc[ply], acc[ply + 1], mbs[ply], us, mv)
@@ -1066,19 +1094,19 @@ def negamax(
         # ---- principal variation search ----
         if legal == 1:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1,
+                          tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth,
                           -beta, -alpha, is_pv, ctl, tbuf, acc)
         else:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1 - r,
+                          tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth - r,
                           -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if sc > alpha and r > 0:          # reduced search beat alpha: verify
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1,
+                              tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth,
                               -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if is_pv and sc > alpha and sc < beta:
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, counter, rep, evals, ply + 1, depth - 1,
+                              tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth,
                               -beta, -alpha, True, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return int32(0)
@@ -1095,7 +1123,11 @@ def negamax(
             break
 
     if legal == 0:
+        if excluded != uint32(0):
+            return alpha                         # only the excluded move was legal
         return int32(-MATE + ply) if in_check else int32(0)
+    if excluded != uint32(0):
+        return best                              # a probe result, not this position's
 
     bound = (uint8(BOUND_LOWER) if best >= beta
              else uint8(BOUND_EXACT) if best > old_alpha
