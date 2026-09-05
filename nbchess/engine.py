@@ -41,8 +41,8 @@ DEFAULT_OVERHEAD_MS = 200.0
 NPS_FLOOR = 150_000.0
 
 #: The clock is spread over the moves the game is expected to still last.
-MOVES_LEFT_FLOOR = 22
-MOVES_LEFT_START = 50
+MOVES_LEFT_FLOOR = 20
+MOVES_LEFT_START = 40
 
 #: Share of the increment spent on top of the clock share each move.
 INCREMENT_SHARE = 0.8
@@ -56,12 +56,14 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     Both are clamped so that we cannot spend more clock than we hold.
 
     The clock is spread over the moves the game is expected to still last:
-    fifty at the start, falling one per two plies, never below twenty-two.
+    forty at the start, falling one per two plies, never below twenty.
     Rated games here run 40 to 100 moves and are decided as often in a queen
     ending as in the opening; the geometric scheme this replaces spent 5 s a
     move early and was down to 1 s a move by move 40 in every long game,
     which is where round 21 let a won position go (from +1.7 to 0.0 in
-    six moves played at about a second each with 27 s on the clock).
+    six moves played at about a second each with 27 s on the clock). The
+    first version spread it over fifty moves and still left 55 s unused in
+    a 47-move loss (round 25), so it now spreads over forty.
     """
     usable = max(1.0, time_left_ms - overhead_ms)
     moves_left = max(MOVES_LEFT_FLOOR, MOVES_LEFT_START - game_ply // 2)

@@ -85,3 +85,7 @@ and 0.015219), ensembled: 0.014517 on the 78,161-row holdout against
 0.015499 for the v6 pair (hand evaluation 0.019548). Match results:
 **+38 +/- 40** over the v6 net at 60 ms (300 games) and +117 +/- 120 at
 400 ms (40 games).
+
+The shipped file carries `scale = 0.7`: the engine multiplies the network's
+output by 0.7 before adding it to the hand evaluation. Measured against the
+undamped net at 60 ms: 0.8 +44 +/- 40, 0.65 +40 +/- 40, 1.3 -112 +/- 82.
