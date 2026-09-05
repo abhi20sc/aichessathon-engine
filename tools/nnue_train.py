@@ -119,9 +119,11 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=Path("nbchess/nnue.npz"))
     ap.add_argument("--residual", action="store_true",
                     help="train the net to correct the hand evaluation rather than replace it")
+    ap.add_argument("--wd", type=float, default=1e-4, help="AdamW weight decay")
+    ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
-    torch.manual_seed(1)
+    torch.manual_seed(args.seed)
 
     t0 = time.perf_counter()
     W, B, S, T, E = load(args.data, args.limit, args.residual)
@@ -133,7 +135,7 @@ def main() -> None:
     W, B, S, T, E = (torch.from_numpy(x) for x in (W, B, S, T, E))
 
     net = Net(args.hidden)
-    opt = torch.optim.Adam(net.parameters(), lr=args.lr)
+    opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)
     sched = torch.optim.lr_scheduler.StepLR(opt, step_size=max(1, args.epochs // 3), gamma=0.5)
 
     def loss_on(ix: np.ndarray) -> float:
@@ -146,6 +148,7 @@ def main() -> None:
             return tot / len(ix)
 
     print(f"initial   train {loss_on(train[:200000]):.6f}  holdout {loss_on(hold):.6f}", flush=True)
+    best_val, best_state = 1e9, None
     for ep in range(args.epochs):
         t1 = time.perf_counter()
         perm = np.random.default_rng(ep).permutation(train)
@@ -159,8 +162,15 @@ def main() -> None:
             with torch.no_grad():
                 net.ft.weight[PAD].zero_()
         sched.step()
+        val = loss_on(hold)
+        if val < best_val:                       # keep the epoch the holdout liked best
+            best_val = val
+            best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
         print(f"epoch {ep + 1:2d}  train {loss_on(train[:200000]):.6f}  "
-              f"holdout {loss_on(hold):.6f}  ({time.perf_counter() - t1:.0f}s)", flush=True)
+              f"holdout {val:.6f}{'  *' if val == best_val else ''}  ({time.perf_counter() - t1:.0f}s)", flush=True)
+    if best_state is not None:
+        net.load_state_dict(best_state)
+        print(f"restored best epoch: holdout {best_val:.6f}")
 
     w1 = net.ft.weight.detach().numpy().astype(np.float32)           # 769 x H
     b1 = net.ft_bias.detach().numpy().astype(np.float32)

@@ -25,6 +25,7 @@ from numba import njit
 from numba.core.types import (
     Array,
     boolean,
+    float32,
     int8,
     int16,
     int32,
@@ -48,7 +49,7 @@ from .core import (
 )
 from .evaltables import MATERIAL
 from .nnue import RESIDUAL as NN_RESIDUAL
-from .nnue import USE_NNUE, nn_eval
+from .nnue import USE_NNUE, acc_copy, acc_update, nn_eval, nn_output
 from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
 from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
 from .terms import (
@@ -70,26 +71,26 @@ from .terms import (
     I_MAT_MG,
     I_PA_EG,
     I_PA_MG,
+    I_PK_ENEMY,
+    I_PK_OWN,
     I_QU_EG,
     I_QU_MG,
     I_RK_EG,
     I_RK_MG,
+    I_ROPEN_EG,
+    I_ROPEN_MG,
+    I_RSEMI_EG,
+    I_RSEMI_MG,
+    I_SHELTER,
+    I_STORM,
+    I_THREAT_EG,
+    I_THREAT_MG,
     KING_ZONE,
     KS_ATTACKERS,
     KS_TABLE,
     KS_WEIGHT,
     PASSED_MASK,
     WEIGHTS,
-    I_SHELTER,
-    I_STORM,
-    I_THREAT_MG,
-    I_THREAT_EG,
-    I_ROPEN_MG,
-    I_ROPEN_EG,
-    I_RSEMI_MG,
-    I_RSEMI_EG,
-    I_PK_ENEMY,
-    I_PK_OWN,
 )
 from .tune import (
     ADJUDICATION_BLEND,
@@ -98,15 +99,13 @@ from .tune import (
     BOUND_LOWER,
     BOUND_UPPER,
     FIFTY_MOVE_SCALE_FROM,
+    FUTILITY_DEPTH,
+    FUTILITY_IMPROVING,
+    FUTILITY_MARGIN,
     HISTORY_MAX,
     INF,
     LMP,
     LMP_MAX_DEPTH,
-    FUTILITY_DEPTH,
-    FUTILITY_IMPROVING,
-    FUTILITY_MARGIN,
-    SEE_PRUNE_DEPTH,
-    SEE_PRUNE_MARGIN,
     LMR,
     MATE,
     MATE_IN_MAX,
@@ -115,6 +114,8 @@ from .tune import (
     REF_VALUES,
     RFP_MARGIN,
     RFP_MAX_DEPTH,
+    SEE_PRUNE_DEPTH,
+    SEE_PRUNE_MARGIN,
     TT_MASK,
 )
 
@@ -404,13 +405,28 @@ def evaluate_w(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     return score if s[14] == uint64(0) else -score
 
 
+@njit(int32(uint64[:], int8[:], float32[:, ::1]), cache=False, nogil=True)
+def evaluate_acc(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
+                 acc: npt.NDArray[np.float32]) -> np.int32:
+    """The shipped evaluation, with the network's accumulators for this node
+    already maintained by the search. USE_NNUE is a compile-time constant,
+    so the branch not taken costs nothing."""
+    if USE_NNUE:
+        sc = nn_output(s[14], acc)                 # side to move's view
+        if NN_RESIDUAL:
+            return sc + evaluate_w(s, mb, WEIGHTS)
+        white = sc if s[14] == uint64(0) else -sc
+        white = endgame_adjust(s, white)
+        return white if s[14] == uint64(0) else -white
+    return evaluate_w(s, mb, WEIGHTS)
+
+
 @njit(int32(uint64[:], int8[:]), cache=False, nogil=True)
 def evaluate(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
-    """The shipped evaluation: the network when one is packaged, otherwise
-    the hand-written terms. USE_NNUE is a compile-time constant, so the
-    branch not taken costs nothing."""
+    """Evaluate a bare position: rebuilds the accumulators. For tools; the
+    search uses evaluate_acc."""
     if USE_NNUE:
-        sc = nn_eval(s, mb)                       # side to move's view
+        sc = nn_eval(s, mb)
         if NN_RESIDUAL:
             return sc + evaluate_w(s, mb, WEIGHTS)
         white = sc if s[14] == uint64(0) else -sc
@@ -435,15 +451,16 @@ def material_ref(s: npt.NDArray[np.uint64]) -> np.int32:
     return sc
 
 
-@njit(int32(uint64[:], int8[:], int64), cache=False, nogil=True)
+@njit(int32(uint64[:], int8[:], float32[:, ::1], int64), cache=False, nogil=True)
 def eval_adjusted(
         s: npt.NDArray[np.uint64],
         mb: npt.NDArray[np.int8],
+        acc: npt.NDArray[np.float32],
         total_ply: int,
 ) -> np.int32:
     """Static evaluation, corrected for the two things the referee does that a
     normal chess evaluation does not model."""
-    sc = evaluate(s, mb)
+    sc = evaluate_acc(s, mb, acc)
 
     # As the fifty-move clock climbs the position really is closer to a draw,
     # so shrink the advantage. This also makes the engine prefer a capture or
@@ -698,7 +715,7 @@ def hist_update(
 
 
 @njit(int32(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :], int64, int32, int32,
-            int64[:], int64[::1]), cache=False, nogil=True)
+            int64[:], int64[::1], float32[:, :, ::1]), cache=False, nogil=True)
 def quiesce(
         stack: npt.NDArray[np.uint64],
         mbs: npt.NDArray[np.int8],
@@ -709,6 +726,7 @@ def quiesce(
         beta: np.int32,
         ctl: npt.NDArray[np.int64],
         tbuf: npt.NDArray[np.int64],
+        acc: npt.NDArray[np.float32],
 ) -> np.int32:
     """Search captures only, so the evaluation is never measured mid-exchange."""
     ctl[C_NODES] += 1
@@ -721,7 +739,7 @@ def quiesce(
         return alpha
 
     s = stack[ply]
-    stand = eval_adjusted(s, mbs[ply], ctl[C_GAMEPLY] + ply)
+    stand = eval_adjusted(s, mbs[ply], acc[ply], ctl[C_GAMEPLY] + ply)
     if stand >= beta:
         return stand
     if stand > alpha:
@@ -762,7 +780,9 @@ def quiesce(
             continue
         if not make(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
-        sc = -quiesce(stack, mbs, buf, sbuf, ply + 1, -beta, -alpha, ctl, tbuf)
+        if USE_NNUE:
+            acc_update(acc[ply], acc[ply + 1], mbs[ply], s[14], mv)
+        sc = -quiesce(stack, mbs, buf, sbuf, ply + 1, -beta, -alpha, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return alpha
         if sc > best:
@@ -840,7 +860,8 @@ def tt_store(tt_key: npt.NDArray[np.uint64], tt_move: npt.NDArray[np.uint32],
 @njit(int32(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
             uint64[:], uint32[:], int16[:], int8[:], uint8[:],
             uint32[:, :], int32[:, :, :], uint64[:], int32[:],
-            int64, int64, int32, int32, boolean, int64[:], int64[::1]), cache=False, nogil=True)
+            int64, int64, int32, int32, boolean, int64[:], int64[::1],
+            float32[:, :, ::1]), cache=False, nogil=True)
 def negamax(
         stack: npt.NDArray[np.uint64],
         mbs: npt.NDArray[np.int8],
@@ -862,6 +883,7 @@ def negamax(
         is_pv: bool,
         ctl: npt.NDArray[np.int64],
         tbuf: npt.NDArray[np.int64],
+        acc: npt.NDArray[np.float32],
 ) -> np.int32:
     ctl[C_NODES] += 1
     # The node-count test is the cheap gate: it keeps the clock syscall to one
@@ -912,7 +934,7 @@ def negamax(
         depth += 1                      # check extension
 
     if depth <= 0:
-        return quiesce(stack, mbs, buf, sbuf, ply, alpha, beta, ctl, tbuf)
+        return quiesce(stack, mbs, buf, sbuf, ply, alpha, beta, ctl, tbuf, acc)
 
     # ---- transposition table ----
     idx = key & uint64(TT_MASK)
@@ -928,7 +950,7 @@ def negamax(
         if b == uint8(BOUND_UPPER) and v <= alpha:
             return v
 
-    static = eval_adjusted(s, mbs[ply], ctl[C_GAMEPLY] + ply)
+    static = eval_adjusted(s, mbs[ply], acc[ply], ctl[C_GAMEPLY] + ply)
     evals[ply] = static
     improving = (not in_check) and ply >= 2 and static > evals[ply - 2]
 
@@ -944,9 +966,11 @@ def negamax(
             if d < 0:
                 d = 0
             make_null(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1])
+            if USE_NNUE:
+                acc_copy(acc[ply], acc[ply + 1])
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                           tt_bound, killers, history, rep, evals, ply + 1, d,
-                          -beta, -beta + int32(1), False, ctl, tbuf)
+                          -beta, -beta + int32(1), False, ctl, tbuf, acc)
             if ctl[C_STOPPED] == 1:
                 return int32(0)
             if sc >= beta:
@@ -987,6 +1011,8 @@ def negamax(
 
         if not make(s, mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
+        if USE_NNUE:
+            acc_update(acc[ply], acc[ply + 1], mbs[ply], us, mv)
         legal += 1
         if is_quiet and quiets < 64:
             quiet_list[quiets] = mv
@@ -1002,19 +1028,19 @@ def negamax(
         if legal == 1:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                           tt_bound, killers, history, rep, evals, ply + 1, depth - 1,
-                          -beta, -alpha, is_pv, ctl, tbuf)
+                          -beta, -alpha, is_pv, ctl, tbuf, acc)
         else:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                           tt_bound, killers, history, rep, evals, ply + 1, depth - 1 - r,
-                          -alpha - int32(1), -alpha, False, ctl, tbuf)
+                          -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if sc > alpha and r > 0:          # reduced search beat alpha: verify
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                               tt_bound, killers, history, rep, evals, ply + 1, depth - 1,
-                              -alpha - int32(1), -alpha, False, ctl, tbuf)
+                              -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if is_pv and sc > alpha and sc < beta:
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                               tt_bound, killers, history, rep, evals, ply + 1, depth - 1,
-                              -beta, -alpha, True, ctl, tbuf)
+                              -beta, -alpha, True, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return int32(0)
 
@@ -1042,8 +1068,8 @@ def negamax(
 @njit(int64(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
             uint64[:], uint32[:], int16[:], int8[:], uint8[:],
             uint32[:, :], int32[:, :, :], uint64[:], int32[:],
-            int64, int32, int32, int64[:], int64[::1], uint32[:], int32[:]),
-      cache=False, nogil=True)
+            int64, int32, int32, int64[:], int64[::1], uint32[:], int32[:],
+            float32[:, :, ::1]), cache=False, nogil=True)
 def search_root(
         stack: npt.NDArray[np.uint64],
         mbs: npt.NDArray[np.int8],
@@ -1065,6 +1091,7 @@ def search_root(
         tbuf: npt.NDArray[np.int64],
         out_moves: npt.NDArray[np.uint32],
         out_scores: npt.NDArray[np.int32],
+        acc: npt.NDArray[np.float32],
 ) -> int:
     """One iteration at `depth`. Scores every root move so the driver can reject
     one for a reason the search cannot see, and returns how many it scored."""
@@ -1085,18 +1112,20 @@ def search_root(
         mv = buf[0][i]
         if not make(s, mbs[0], stack[1], mbs[1], mv):
             continue
+        if USE_NNUE:
+            acc_update(acc[0], acc[1], mbs[0], s[14], mv)
         if count == 0:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                           tt_bound, killers, history, rep, evals, 1, depth - 1,
-                          -beta, -alpha, True, ctl, tbuf)
+                          -beta, -alpha, True, ctl, tbuf, acc)
         else:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                           tt_bound, killers, history, rep, evals, 1, depth - 1,
-                          -alpha - int32(1), -alpha, False, ctl, tbuf)
+                          -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
             if sc > alpha:
                 sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                               tt_bound, killers, history, rep, evals, 1, depth - 1,
-                              -beta, -alpha, True, ctl, tbuf)
+                              -beta, -alpha, True, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return -count if count > 0 else 0
         out_moves[count] = mv

@@ -16,6 +16,7 @@ import numpy as np
 from .clock import available as clock_available
 from .clock import new_timebuf, now_ns
 from .fen import new_stack, set_fen
+from .nnue import HIDDEN, acc_refresh
 from .search import (
     C_CONTEMPT,
     C_DEADLINE,
@@ -99,6 +100,7 @@ class Engine:
         self.evals = np.zeros(MAX_PLY, dtype=np.int32)
 
         self.ctl = np.zeros(12, dtype=np.int64)
+        self.acc = np.zeros((MAX_PLY, 2, HIDDEN), dtype=np.float32)   # network accumulators per ply
         self.tbuf = new_timebuf()
         self.out_moves = np.zeros(MAX_ROOT_MOVES, dtype=np.uint32)
         self.out_scores = np.zeros(MAX_ROOT_MOVES, dtype=np.int32)
@@ -150,6 +152,7 @@ class Engine:
         """
         started = time.perf_counter()
         set_fen(self.stack[0], self.mbs[0], fen)
+        acc_refresh(self.mbs[0], self.acc[0])
         age_history(self.history)
         self.killers[:] = 0
 
@@ -185,7 +188,7 @@ class Engine:
                     self.tt_key, self.tt_move, self.tt_score, self.tt_depth, self.tt_bound,
                     self.killers, self.history, self.rep, self.evals,
                     depth, alpha, beta, self.ctl, self.tbuf,
-                    self.out_moves, self.out_scores)
+                    self.out_moves, self.out_scores, self.acc)
                 if count <= 0 or self.ctl[C_STOPPED] == 1:
                     break
                 top = max(int(self.out_scores[i]) for i in range(count))
