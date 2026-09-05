@@ -43,10 +43,15 @@ def main() -> None:
     ap.add_argument("--per-game", type=int, default=8)
     ap.add_argument("--late-weight", type=float, default=0.0,
                     help="3.0 makes the last position four times as likely as the first")
+    ap.add_argument("--start-fens", type=Path, default=None,
+                    help="file of FENs to start games from (the rated openings) instead of "
+                         "the initial position; a few random moves are still played first")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args()
 
     rng = random.Random(args.seed if args.seed is not None else int(time.time()))
+    starts = ([line.strip() for line in args.start_fens.read_text().splitlines() if line.strip()]
+              if args.start_fens else [])
     player = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
     player.configure({"Threads": 1, "Hash": 64})
     labeller = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
@@ -59,8 +64,8 @@ def main() -> None:
     games = rows = 0
     try:
         for _ in range(args.games):
-            board = chess.Board()
-            for _ in range(rng.randint(4, 12)):
+            board = chess.Board(rng.choice(starts)) if starts else chess.Board()
+            for _ in range(rng.randint(1, 4) if starts else rng.randint(4, 12)):
                 moves = list(board.legal_moves)
                 if not moves:
                     break
@@ -75,7 +80,7 @@ def main() -> None:
                 if mv is None:
                     break
                 if (not board.is_check() and not board.is_capture(mv)
-                        and len(board.move_stack) > 10):
+                        and (len(board.move_stack) > 10 or starts)):
                     candidates.append(board.fen())
                 board.push(mv)
             result = {"1-0": 1.0, "0-1": 0.0}.get(board.result(claim_draw=True), 0.5)
