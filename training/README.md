@@ -88,4 +88,4 @@ and 0.015219), ensembled: 0.014517 on the 78,161-row holdout against
 
 The shipped file carries `scale = 0.7`: the engine multiplies the network's
 output by 0.7 before adding it to the hand evaluation. Measured against the
-undamped net at 60 ms: 0.8 +44 +/- 40, 0.65 +40 +/- 40, 1.3 -112 +/- 82.
+undamped net at 60 ms: 0.8 +44 +/- 40, 0.65 +34 +/- 40, 1.3 -112 +/- 82.
