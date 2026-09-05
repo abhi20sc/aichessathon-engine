@@ -59,7 +59,7 @@ seeds 1 and 2 (`train_r2_s1.log`, `train_r2_s2.log`; holdout 0.013818 and
 pair scores 0.00970 against 0.01669 for the v4 pair (hand evaluation
 0.02093). Match result: **+33 +/- 40** over the v4 net, 300 games at 60 ms.
 
-### v6 net (5 Sep afternoon) - the shipped net
+### v6 net (5 Sep afternoon)
 
 The trainer's holdout was a random 5% of rows; with ~24 positions per game
 that put siblings of every holdout position in the training set, so the
@@ -73,3 +73,15 @@ Same recipe on 1,181,564 positions (files at 12:10 UTC), seeds 1 and 2
 ensembled: pair 0.016178 on the same 59,079-row holdout, against 0.016827
 for the v5 pair and 0.017277 for the v4 pair (hand evaluation 0.020343).
 Match result: **+31 +/- 40** over the v5 net, 300 games at 60 ms.
+
+### v7 net (5 Sep evening) - the shipped net
+
+Same recipe, 12 epochs, on 1,563,204 positions (files at 15:45 UTC). From
+13:45 UTC the pipeline ran with `--late-weight 3 --per-game 32`, which
+samples the late game up to four times as often, so roughly 250k of these
+rows are endgame-heavy - the phase the rated games showed as our weakest.
+Seeds 1 and 3 (`train_r6_s1.log`, `train_r6_s3.log`; clean holdout 0.015042
+and 0.015219), ensembled: 0.014517 on the 78,161-row holdout against
+0.015499 for the v6 pair (hand evaluation 0.019548). Match results:
+**+38 +/- 40** over the v6 net at 60 ms (300 games) and +117 +/- 120 at
+400 ms (40 games).
