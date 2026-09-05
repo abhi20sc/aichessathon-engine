@@ -129,9 +129,12 @@ def main() -> None:
     W, B, S, T, E = load(args.data, args.limit, args.residual)
     n = len(T)
     print(f"{n:,} positions loaded in {time.perf_counter() - t0:.0f}s", flush=True)
-    idx = np.random.default_rng(1).permutation(n)
-    hold = idx[: n // 20]
-    train = idx[n // 20:]
+    # Hold out the LAST 5% as a contiguous block. The pipeline writes many
+    # positions per game, so a random split would put siblings of every
+    # holdout position in the training set and the holdout would flatter
+    # the net (and pick an overfitted epoch). Contiguous rows are whole games.
+    hold = np.arange(n - n // 20, n)
+    train = np.arange(0, n - n // 20)
     W, B, S, T, E = (torch.from_numpy(x) for x in (W, B, S, T, E))
 
     net = Net(args.hidden)

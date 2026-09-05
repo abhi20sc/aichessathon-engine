@@ -37,16 +37,43 @@ MAX_HISTORY = 512
 #: Milliseconds assumed lost to transport per move. Replaced by a measurement
 #: once the agent has seen the referee's clock disagree with its own.
 DEFAULT_OVERHEAD_MS = 200.0
-MOVES_TO_GO = 50
+#: Lowest speed the node cap is ever computed from (nodes per second).
+NPS_FLOOR = 150_000.0
 
-#: Fraction of the projected time pool to spend on one move.
-#:
-#: Raised from 0.024 after two rated games showed us finishing with 54-82s of a
-#: 120s clock unspent. Measured: giving this engine 1.6x the thinking time is
-#: worth +85 +/- 71 Elo over 100 games, and the 300-ply worst case still
-#: survives with ~2s to spare. Real games run 65-86 plies, where the extra
-#: spending is never clawed back by a draining clock.
-SOFT_FRACTION = 0.038
+#: The clock is spread over the moves the game is expected to still last.
+MOVES_LEFT_FLOOR = 22
+MOVES_LEFT_START = 50
+
+#: Share of the increment spent on top of the clock share each move.
+INCREMENT_SHARE = 0.8
+
+
+def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
+             game_ply: int = 0) -> tuple[float, float]:
+    """Return (soft, hard) budgets in milliseconds.
+
+    Soft is the target; hard is the ceiling the search is never allowed past.
+    Both are clamped so that we cannot spend more clock than we hold.
+
+    The clock is spread over the moves the game is expected to still last:
+    fifty at the start, falling one per two plies, never below twenty-two.
+    Rated games here run 40 to 100 moves and are decided as often in a queen
+    ending as in the opening; the geometric scheme this replaces spent 5 s a
+    move early and was down to 1 s a move by move 40 in every long game,
+    which is where round 21 let a won position go (Stockfish +1.7 to 0.0 in
+    six moves played at about a second each with 27 s on the clock).
+    """
+    usable = max(1.0, time_left_ms - overhead_ms)
+    moves_left = max(MOVES_LEFT_FLOOR, MOVES_LEFT_START - game_ply // 2)
+    soft = usable / moves_left + INCREMENT_SHARE * increment_ms
+    soft = max(soft, min(0.6 * increment_ms, 0.5 * usable))
+    # The hard ceiling must survive a search that runs to it on consecutive
+    # moves with transport charged on top: never more than half of what is
+    # left, and always a second in hand.
+    hard = min(4.0 * soft, 0.5 * usable, usable - 1000.0)
+    hard = max(hard, min(0.5 * usable, 50.0))
+    soft = min(soft, hard)
+    return soft, hard
 
 
 def move_to_uci(mv: int) -> str:
@@ -58,25 +85,6 @@ def move_to_uci(mv: int) -> str:
         + chr(97 + to % 8) + str(to // 8 + 1)
         + ("" if promo == 0 else _PROMO_CHARS[promo - 1])
     )
-
-
-def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float) -> tuple[float, float]:
-    """Return (soft, hard) budgets in milliseconds.
-
-    Soft is the target; hard is the ceiling the search is never allowed past.
-    Both are clamped so that we cannot spend more clock than we hold.
-    """
-    usable = max(1.0, time_left_ms - overhead_ms)
-    pool = time_left_ms + increment_ms * (MOVES_TO_GO - 1) - overhead_ms * (2 + MOVES_TO_GO)
-    soft = SOFT_FRACTION * max(pool, increment_ms)
-    soft = max(soft, min(0.6 * increment_ms, 0.5 * usable))
-    # The hard ceiling must survive a search that runs to it on consecutive
-    # moves with transport charged on top: never more than half of what is
-    # left, and always a second in hand.
-    hard = min(5.0 * soft, 0.5 * usable, usable - 1000.0)
-    hard = max(hard, min(0.5 * usable, 50.0))
-    soft = min(soft, hard)
-    return soft, hard
 
 
 class Engine:
@@ -167,7 +175,11 @@ class Engine:
         self.ctl[C_CONTEMPT] = CONTEMPT
         self.ctl[C_GAMEPLY] = game_ply
         self.ctl[C_DEADLINE] = now_ns(self.tbuf) + int(hard_ms * 1_000_000)
-        self.ctl[C_NODECAP] = max(4096, int(self.nps * hard_ms / 1000.0 * 2.0))
+        # Node cap: a backstop in case the clock misbehaves, never the real
+        # limit. The speed estimate is floored so that one wall-time hiccup
+        # (a suspended process, a slow first move) cannot shrink the cap into
+        # something that ends the next search after a few thousand nodes.
+        self.ctl[C_NODECAP] = max(4096, int(max(self.nps, NPS_FLOOR) * hard_ms / 1000.0 * 2.0))
 
         ranked: list[tuple[str, int]] = []
         prev_best = ""

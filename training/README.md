@@ -51,10 +51,25 @@ net with halved output weights) and writes it as `.safetensors`, which
 Match result at 60 ms/move, 600 games, both colours from the same openings:
 **+40 +/- 28 Elo** over the v3 engine without the net; +42 +/- 70 at 400 ms.
 
-### v5 net (5 Sep midday) - the shipped net
+### v5 net (5 Sep midday)
 
 Same recipe on 876,397 positions (the three laptop files at 08:45 UTC),
 seeds 1 and 2 (`train_r2_s1.log`, `train_r2_s2.log`; holdout 0.013818 and
 0.013905), ensembled the same way. On a fresh 43,820-position holdout the
 pair scores 0.00970 against 0.01669 for the v4 pair (hand evaluation
 0.02093). Match result: **+33 +/- 40** over the v4 net, 300 games at 60 ms.
+
+### v6 net (5 Sep afternoon) - the shipped net
+
+The trainer's holdout was a random 5% of rows; with ~24 positions per game
+that put siblings of every holdout position in the training set, so the
+holdout flattered the net and "best epoch" picked an overfitted one. The
+holdout is now the last 5% of rows as a contiguous block (whole games). On
+that clean holdout the best epoch is 5 of 20 and the loss curve rises after
+it, so every earlier net had been trained too long.
+
+Same recipe on 1,181,564 positions (files at 12:10 UTC), seeds 1 and 2
+(`train_r4_s1.log`, `train_r4_s2.log`; clean holdout 0.016743 and 0.016739),
+ensembled: pair 0.016178 on the same 59,079-row holdout, against 0.016827
+for the v5 pair and 0.017277 for the v4 pair (hand evaluation 0.020343).
+Match result: **+31 +/- 40** over the v5 net, 300 games at 60 ms.

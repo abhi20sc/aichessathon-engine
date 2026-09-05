@@ -246,13 +246,14 @@ def get_move(fen: str, time_left_ms: int) -> str:
         try:
             tracked = _tracker.sync(fen)
             history = GameTracker.history_fens(tracked)
-            soft, hard = allocate(float(time_left_ms), INCREMENT_MS, _overhead_ms)
             # Plies since the game's OWN starting position, which the referee
             # counts from zero. Rated games begin at a curated opening, so the
             # FEN's move counter is not the game's ply count - a position from
             # move seven reads as ply twelve when the referee says zero.
+            game_ply = len(tracked.move_stack)
+            soft, hard = allocate(float(time_left_ms), INCREMENT_MS, _overhead_ms, game_ply)
             ranked = _engine.think(fen, budget_ms=soft, hard_ms=hard, history=history,
-                                   game_ply=len(tracked.move_stack))
+                                   game_ply=game_ply)
             candidate = _choose(tracked, ranked)
             if candidate in legal:
                 chosen = candidate

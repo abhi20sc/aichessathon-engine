@@ -86,7 +86,10 @@ def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
             return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
 
         side = board.turn
-        soft, hard = alloc[side](clock[side], inc, 200.0)
+        try:                                     # newer allocators take the ply
+            soft, hard = alloc[side](clock[side], inc, 200.0, len(board.move_stack))
+        except TypeError:
+            soft, hard = alloc[side](clock[side], inc, 200.0)
         t = time.perf_counter()
         ranked = engines[side].think(board.fen(), budget_ms=soft, hard_ms=hard,
                                      game_ply=len(board.move_stack))
