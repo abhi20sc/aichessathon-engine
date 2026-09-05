@@ -7,11 +7,12 @@ the opponent's, the board flipped for Black. One shared hidden layer with a
 clipped ReLU, then a linear output over the side-to-move accumulator followed
 by the other side's. Output is centipawns from the side to move's view.
 
-The accumulators are rebuilt from the board on every call. That is the slow
-way round - an incremental update in make() is the classic trick - but it
-keeps the network out of the move generator, and at this size it costs a
-few microseconds.
+The search keeps the accumulators up to date incrementally (acc_update after
+every move, acc_copy across a null move) and reads the output from them; the
+from-scratch path is kept for tools and tests. Weights ship as a
+.safetensors file we wrote ourselves, read here with numpy alone.
 """
+import json
 from pathlib import Path
 
 import numpy as np
@@ -19,19 +20,57 @@ import numpy.typing as npt
 from numba import njit
 from numba.core.types import float32, int8, int32, int64, uint32, uint64
 
-_PATH = Path(__file__).with_name("nnue.npz")
+_PATH = Path(__file__).with_name("nnue.safetensors")
 USE_NNUE = _PATH.exists()
 
+
+def load_safetensors(path: Path) -> dict[str, npt.NDArray[np.float32]]:
+    """Read a .safetensors file with numpy alone: an 8-byte little-endian
+    header length, a JSON header naming each tensor's dtype, shape and byte
+    range, then the raw data. Only float32 tensors are written by our tools."""
+    raw = path.read_bytes()
+    n = int.from_bytes(raw[:8], "little")
+    header = json.loads(raw[8:8 + n].decode("utf-8"))
+    base = 8 + n
+    out: dict[str, npt.NDArray[np.float32]] = {}
+    for name, meta in header.items():
+        if name == "__metadata__":
+            continue
+        if meta["dtype"] != "F32":
+            raise ValueError(f"{path}: tensor {name} is {meta['dtype']}, expected F32")
+        lo, hi = meta["data_offsets"]
+        arr = np.frombuffer(raw[base + lo:base + hi], dtype="<f4").reshape(meta["shape"])
+        out[name] = np.ascontiguousarray(arr, dtype=np.float32)
+    return out
+
+
+def save_safetensors(path: Path, tensors: dict[str, npt.NDArray[np.float32]]) -> None:
+    """Write float32 tensors in the safetensors layout (tools only)."""
+    header: dict[str, object] = {}
+    chunks: list[bytes] = []
+    offset = 0
+    for name, arr in tensors.items():
+        a = np.ascontiguousarray(arr, dtype=np.float32)
+        b = a.tobytes()
+        header[name] = {"dtype": "F32", "shape": list(a.shape),
+                        "data_offsets": [offset, offset + len(b)]}
+        chunks.append(b)
+        offset += len(b)
+    h = json.dumps(header).encode("utf-8")
+    h += b" " * ((8 - len(h) % 8) % 8)
+    path.write_bytes(len(h).to_bytes(8, "little") + h + b"".join(chunks))
+
+
 if USE_NNUE:
-    with np.load(_PATH) as _z:
-        W1: npt.NDArray[np.float32] = np.ascontiguousarray(_z["w1"], dtype=np.float32)
-        B1: npt.NDArray[np.float32] = np.ascontiguousarray(_z["b1"], dtype=np.float32)
-        W2: npt.NDArray[np.float32] = np.ascontiguousarray(_z["w2"], dtype=np.float32)
-        B2 = float(_z["b2"])
-        #: A residual net corrects the hand evaluation instead of replacing it.
-        RESIDUAL = bool(int(_z["residual"])) if "residual" in _z else False
-        #: Multiplier on the network's output; below 1 damps a noisy net.
-        OUT_SCALE = float(_z["scale"]) if "scale" in _z else 1.0
+    _z = load_safetensors(_PATH)
+    W1: npt.NDArray[np.float32] = _z["w1"]
+    B1: npt.NDArray[np.float32] = _z["b1"]
+    W2: npt.NDArray[np.float32] = _z["w2"]
+    B2 = float(_z["b2"][0])
+    #: A residual net corrects the hand evaluation instead of replacing it.
+    RESIDUAL = bool(int(_z["residual"][0])) if "residual" in _z else False
+    #: Multiplier on the network's output; below 1 damps a noisy net.
+    OUT_SCALE = float(_z["scale"][0]) if "scale" in _z else 1.0
 else:  # placeholders so the module still compiles; never used
     W1 = np.zeros((769, 8), dtype=np.float32)
     B1 = np.zeros(8, dtype=np.float32)

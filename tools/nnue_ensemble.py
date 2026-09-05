@@ -5,12 +5,17 @@ one network whose hidden layer is the k hidden layers side by side and whose
 output weights are each divided by k. So an ensemble needs no engine change;
 it is just a wider net, and inference costs k times as much.
 
-    python -m tools.nnue_ensemble a.npz b.npz c.npz --out nbchess/nnue.npz
+    python -m tools.nnue_ensemble a.npz b.npz c.npz --out nbchess/nnue.safetensors
+
+The output is a .safetensors file (the format the platform names as allowed
+for weights), written by nbchess.nnue.save_safetensors.
 """
 import argparse
 from pathlib import Path
 
 import numpy as np
+
+from nbchess.nnue import save_safetensors
 
 
 def main() -> None:
@@ -33,7 +38,11 @@ def main() -> None:
     b2 = np.float32(sum(float(z["b2"]) for z in zs) / k)
     scale = np.float32(args.scale) if args.scale is not None else (
         zs[0]["scale"] if "scale" in zs[0] else np.float32(1.0))
-    np.savez(args.out, w1=w1, b1=b1, w2=w2, b2=b2, residual=zs[0]["residual"], scale=scale)
+    save_safetensors(args.out, {
+        "w1": w1, "b1": b1, "w2": w2,
+        "b2": np.asarray([b2], dtype=np.float32),
+        "residual": np.asarray([float(zs[0]["residual"])], dtype=np.float32),
+        "scale": np.asarray([float(scale)], dtype=np.float32)})
     print(f"wrote {args.out}: {k} nets, hidden {k * h}, scale {float(scale)}")
 
 
