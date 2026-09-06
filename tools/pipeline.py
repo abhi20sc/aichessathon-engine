@@ -34,6 +34,51 @@ STOCKFISH = os.environ.get("STOCKFISH", "/usr/games/stockfish")
 CLIP_CP = 1500
 
 
+#: Material templates for random endings: (white pieces, black pieces) as
+#: piece-type lists, pawns added separately. Rook and minor-piece endings are
+#: where the rated games have gone wrong, so they dominate.
+R, B, N, Q = chess.ROOK, chess.BISHOP, chess.KNIGHT, chess.QUEEN
+ENDING_TEMPLATES = [
+    ([R], [R]), ([R], [R]), ([R], [R]), ([R], [B]), ([R], [N]),
+    ([B], [N]), ([B], [B]), ([N], [N]), ([], []), ([], []),
+    ([R, B], [R, N]), ([R, R], [R, R]), ([Q], [Q]), ([Q], [R, B]),
+    ([R, N], [R, B]), ([B, N], [R]),
+]
+
+
+def random_ending(rng: random.Random) -> chess.Board | None:
+    """A random legal ending from a template with 1-4 pawns a side. Returns
+    None when the placement came out illegal; the caller just tries again."""
+    white, black = rng.choice(ENDING_TEMPLATES)
+    board = chess.Board(None)
+    squares = list(chess.SQUARES)
+    rng.shuffle(squares)
+    def place(piece_type: int, colour: bool) -> bool:
+        while squares:
+            sq = squares.pop()
+            if piece_type == chess.PAWN and chess.square_rank(sq) in (0, 7):
+                continue
+            board.set_piece_at(sq, chess.Piece(piece_type, colour))
+            return True
+        return False
+    place(chess.KING, chess.WHITE)
+    place(chess.KING, chess.BLACK)
+    for pt in white:
+        place(pt, chess.WHITE)
+    for pt in black:
+        place(pt, chess.BLACK)
+    npw = rng.randint(1, 4)
+    npb = max(1, min(4, npw + rng.randint(-1, 1)))
+    for _ in range(npw):
+        place(chess.PAWN, chess.WHITE)
+    for _ in range(npb):
+        place(chess.PAWN, chess.BLACK)
+    board.turn = rng.choice([chess.WHITE, chess.BLACK])
+    if not board.is_valid() or board.is_game_over():
+        return None
+    return board
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, required=True)
@@ -43,6 +88,9 @@ def main() -> None:
     ap.add_argument("--per-game", type=int, default=8)
     ap.add_argument("--late-weight", type=float, default=0.0,
                     help="3.0 makes the last position four times as likely as the first")
+    ap.add_argument("--endgames", action="store_true",
+                    help="start from random endings (rook, minor-piece and pawn endings "
+                         "with a few pawns each) instead of the initial position")
     ap.add_argument("--start-fens", type=Path, default=None,
                     help="file of FENs to start games from (the rated openings) instead of "
                          "the initial position; a few random moves are still played first")
@@ -64,8 +112,14 @@ def main() -> None:
     games = rows = 0
     try:
         for _ in range(args.games):
-            board = chess.Board(rng.choice(starts)) if starts else chess.Board()
-            for _ in range(rng.randint(1, 4) if starts else rng.randint(4, 12)):
+            if args.endgames:
+                board = random_ending(rng)
+                if board is None:
+                    continue
+            else:
+                board = chess.Board(rng.choice(starts)) if starts else chess.Board()
+            plies = 0 if args.endgames else rng.randint(1, 4) if starts else rng.randint(4, 12)
+            for _ in range(plies):
                 moves = list(board.legal_moves)
                 if not moves:
                     break
@@ -80,7 +134,7 @@ def main() -> None:
                 if mv is None:
                     break
                 if (not board.is_check() and not board.is_capture(mv)
-                        and (len(board.move_stack) > 10 or starts)):
+                        and (len(board.move_stack) > 10 or starts or args.endgames)):
                     candidates.append(board.fen())
                 board.push(mv)
             result = {"1-0": 1.0, "0-1": 0.0}.get(board.result(claim_draw=True), 0.5)
