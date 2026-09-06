@@ -41,11 +41,11 @@ DEFAULT_OVERHEAD_MS = 200.0
 NPS_FLOOR = 150_000.0
 
 #: The clock is spread over the moves the game is expected to still last.
-MOVES_LEFT_FLOOR = 22
-MOVES_LEFT_START = 45
+MOVES_LEFT_FLOOR = 30
+MOVES_LEFT_START = 60
 
 #: Share of the increment spent on top of the clock share each move.
-INCREMENT_SHARE = 0.8
+INCREMENT_SHARE = 0.6
 
 
 def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
@@ -56,17 +56,17 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     Both are clamped so that we cannot spend more clock than we hold.
 
     The clock is spread over the moves the game is expected to still last:
-    forty-five at the start, falling one per two plies, never below
-    twenty-two. An iteration may start whenever the soft budget is not yet
-    spent; the hard ceiling, 2.5 times the budget, cuts it, and the search
-    keeps what the cut iteration finished.
-    Rated games here run 40 to 100 moves and are decided as often in a queen
-    ending as in the opening; the geometric scheme this replaces spent 5 s a
-    move early and was down to 1 s a move by move 40 in every long game,
-    which is where round 21 let a won position go (from +1.7 to 0.0 in
-    six moves played at about a second each with 27 s on the clock). The
-    first version spread it over fifty moves and still left 55 s unused in
-    a 47-move loss (round 25), so it now spreads over forty.
+    sixty at the start, falling one per two plies, never below thirty, plus
+    six tenths of the increment. An iteration may start whenever the soft
+    budget is not yet spent; the hard ceiling, 2.5 times the budget, cuts
+    it, and the search keeps what the cut iteration finished, so real spend
+    runs at about 1.3 times the budget.
+
+    History: the geometric scheme this replaced spent 5 s a move early and
+    was down to 1 s by move 40 in every long game (round 21 let a won
+    position go at a second a move with 27 s on the clock); a 50-move spread
+    left 55 s unused in a 47-move loss (round 25); a 45/22 spread with the
+    partial-iteration policy ran a 162-move game down to 2 s (round 31).
     """
     usable = max(1.0, time_left_ms - overhead_ms)
     moves_left = max(MOVES_LEFT_FLOOR, MOVES_LEFT_START - game_ply // 2)
