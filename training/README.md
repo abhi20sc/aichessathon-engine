@@ -107,3 +107,7 @@ openings sampler (`--start-fens`). Seeds 1 and 3 (`train_v10_s1.log`,
 `train_v10_s3.log`; clean holdout 0.009869 and 0.009839 - the pure-engine
 target is a different loss scale from the earlier logs), ensembled.
 Match result: **+50 +/- 40** over the v9 net, 300 games at 60 ms.
+
+For the v10 net the gain was re-tuned: 0.85 measured +37 +/- 40 over 0.7
+(300 games at 60 ms), 1.0 +20 +/- 54, 0.55 -29 +/- 61; the shipped file
+carries `scale = 0.85` from v12 on.
