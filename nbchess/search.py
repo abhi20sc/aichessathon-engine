@@ -94,7 +94,6 @@ from .terms import (
 )
 from .tune import (
     ADJUDICATION_BLEND,
-    ADJUDICATION_WIN,
     BOUND_EXACT,
     BOUND_LOWER,
     BOUND_UPPER,
@@ -487,15 +486,14 @@ def eval_adjusted(
             left = 0
         sc = int32(int64(sc) * left // (100 - FIFTY_MOVE_SCALE_FROM))
 
-    # Approaching the ply cap, the terminal value of the game stops being
-    # "who wins the chess game" and becomes "who has more material".
+    # Approaching the ply cap the game is drawn whatever the position, so
+    # an advantage is worth less the closer the cap comes (the rules changed
+    # on 6 Sep from a material adjudication at 300 plies to a draw at 600).
     if total_ply > PLY_CAP - ADJUDICATION_BLEND:
         w = total_ply - (PLY_CAP - ADJUDICATION_BLEND)
         if w > ADJUDICATION_BLEND:
             w = ADJUDICATION_BLEND
-        mat = material_ref(s)
-        sc = int32((int64(sc) * (ADJUDICATION_BLEND - w)
-                    + int64(mat) * w) // ADJUDICATION_BLEND)
+        sc = int32(int64(sc) * (ADJUDICATION_BLEND - w) // ADJUDICATION_BLEND)
     return sc
 
 
@@ -935,15 +933,10 @@ def negamax(
     draw_score = (np.int32(-ctl[C_CONTEMPT]) if (ply & 1) == 0
                   else np.int32(ctl[C_CONTEMPT]))
     if ply > 0:
-        # The referee stops here and awards the game on raw material. Past this
-        # point there is no chess left to play, only an adjudication to win.
+        # The referee stops here and the game is drawn, whatever is on the
+        # board.
         if ctl[C_GAMEPLY] + ply >= PLY_CAP:
-            mat = material_ref(s)
-            if mat > 0:
-                return int32(ADJUDICATION_WIN)
-            if mat < 0:
-                return int32(-ADJUDICATION_WIN)
-            return int32(0)
+            return draw_score
         if s[17] >= uint64(100):
             return draw_score
         if is_repetition(rep, ridx, int64(s[17])):

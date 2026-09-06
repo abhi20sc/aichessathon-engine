@@ -52,16 +52,12 @@ IIR_MIN_DEPTH = 4     # internal iterative reduction: no hash move at this depth
 SE_MIN_DEPTH = 8      # singular extension: probe the hash move from this depth
 SE_MARGIN = 2         # ... with a window this many centipawns per ply below its score
 
-#: The referee stops the game at this many plies and awards it on raw material,
-#: using its own scale - not on our evaluation.
-PLY_CAP = 300
-#: Over the last this many plies before the cap, the evaluation is blended
-#: toward that raw material count, because that is what the game will actually
-#: be scored on. A crushing attack is worth nothing to an adjudicator.
+#: The referee stops the game at this many plies and calls it a draw
+#: (rules as of 6 Sep; until then it was a material adjudication at 300).
+PLY_CAP = 600
+#: Over the last this many plies before the cap, the evaluation is scaled
+#: toward zero, because that is what the game will actually be scored as.
 ADJUDICATION_BLEND = 80
-#: Score returned for a position that reaches the cap materially ahead. Well
-#: above any positional evaluation, well below a real mate.
-ADJUDICATION_WIN = 20000
 #: Referee's piece values, in centipawns, on its scale: P1 N3 B3 R5 Q9.
 #: An array rather than a tuple so the search can index it with a loop variable.
 REF_VALUES: npt.NDArray[np.int32] = np.array([100, 300, 300, 500, 900, 0], dtype=np.int32)

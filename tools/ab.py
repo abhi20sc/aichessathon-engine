@@ -61,7 +61,7 @@ def openings(count: int, seed: int = 17) -> list[str]:
 
 
 def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
-               ply_cap: int = 300) -> float:
+               ply_cap: int = 600) -> float:
     """One game under a real clock, each side running its own allocator.
 
     A fixed per-move budget cannot test a time-management change: the whole
@@ -77,13 +77,8 @@ def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
         if board.is_game_over(claim_draw=True):
             r = board.result(claim_draw=True)
             return {"1-0": 1.0, "0-1": 0.0}.get(r, 0.5)
-        if len(board.move_stack) >= ply_cap:
-            vals = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
-                    chess.ROOK: 5, chess.QUEEN: 9}
-            bal = sum(v * (len(board.pieces(p, chess.WHITE))
-                           - len(board.pieces(p, chess.BLACK)))
-                      for p, v in vals.items())
-            return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
+        if len(board.move_stack) >= ply_cap:      # the referee draws it here
+            return 0.5
 
         side = board.turn
         try:                                     # newer allocators take the ply
@@ -133,7 +128,7 @@ class Ponder:
         self.thread = None
 
 
-def play(white, black, fen: str, ms: float, ply_cap: int = 300,
+def play(white, black, fen: str, ms: float, ply_cap: int = 600,
          ms_white: float | None = None, ms_black: float | None = None,
          ponder=None) -> float:
     """One game. Returns White's score: 1.0, 0.5 or 0.0.
@@ -151,13 +146,8 @@ def play(white, black, fen: str, ms: float, ply_cap: int = 300,
             if board.is_game_over(claim_draw=True):
                 r = board.result(claim_draw=True)
                 return {"1-0": 1.0, "0-1": 0.0}.get(r, 0.5)
-            if len(board.move_stack) >= ply_cap:
-                vals = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
-                        chess.ROOK: 5, chess.QUEEN: 9}
-                bal = sum(v * (len(board.pieces(p, chess.WHITE))
-                               - len(board.pieces(p, chess.BLACK)))
-                          for p, v in vals.items())
-                return 1.0 if bal > 0 else 0.0 if bal < 0 else 0.5
+            if len(board.move_stack) >= ply_cap:  # the referee draws it here
+                return 0.5
             eng = engines[board.turn]
             bms = budget[board.turn]
             if pond is not None and eng is ponder:
