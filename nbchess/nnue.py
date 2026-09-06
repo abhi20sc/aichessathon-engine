@@ -65,8 +65,10 @@ if USE_NNUE:
     _z = load_safetensors(_PATH)
     W1: npt.NDArray[np.float32] = _z["w1"]
     B1: npt.NDArray[np.float32] = _z["b1"]
-    W2: npt.NDArray[np.float32] = _z["w2"]
-    B2 = float(_z["b2"][0])
+    #: Output weights, one row per piece-count bucket (a net without buckets
+    #: has a single row that serves every position).
+    W2: npt.NDArray[np.float32] = np.ascontiguousarray(np.atleast_2d(_z["w2"]), dtype=np.float32)
+    B2: npt.NDArray[np.float32] = np.ascontiguousarray(_z["b2"].reshape(-1), dtype=np.float32)
     #: A residual net corrects the hand evaluation instead of replacing it.
     RESIDUAL = bool(int(_z["residual"][0])) if "residual" in _z else False
     #: Multiplier on the network's output; below 1 damps a noisy net.
@@ -74,11 +76,15 @@ if USE_NNUE:
 else:  # placeholders so the module still compiles; never used
     W1 = np.zeros((769, 8), dtype=np.float32)
     B1 = np.zeros(8, dtype=np.float32)
-    W2 = np.zeros(16, dtype=np.float32)
-    B2 = 0.0
+    W2 = np.zeros((1, 16), dtype=np.float32)
+    B2 = np.zeros(1, dtype=np.float32)
     RESIDUAL = False
     OUT_SCALE = 1.0
 HIDDEN = int(B1.shape[0])
+N_BUCKETS = int(W2.shape[0])
+#: Piece counts (both sides, kings included) at or below which each bucket
+#: applies; the last bucket takes everything above the last edge.
+BUCKET_EDGES = np.array([12, 22], dtype=np.int64)
 
 
 @njit(int64(int8[:], float32[:, ::1]), cache=False, nogil=True)
@@ -170,20 +176,32 @@ def acc_copy(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32]) ->
     return 0
 
 
-@njit(int32(uint64, float32[:, ::1]), cache=False, nogil=True)
-def nn_output(stm: np.uint64, acc: npt.NDArray[np.float32]) -> np.int32:
-    """Centipawns from the side to move's view, given ready accumulators."""
-    out = float32(B2)
+@njit(int64(int64), forceinline=True, cache=False, nogil=True)
+def bucket_of(pieces: int) -> int:
+    """Which output row scores a position with this many pieces on the board."""
+    if N_BUCKETS == 1:
+        return 0
+    for k in range(BUCKET_EDGES.shape[0]):
+        if pieces <= BUCKET_EDGES[k]:
+            return min(k, N_BUCKETS - 1)
+    return N_BUCKETS - 1
+
+
+@njit(int32(uint64, float32[:, ::1], int64), cache=False, nogil=True)
+def nn_output(stm: np.uint64, acc: npt.NDArray[np.float32], bucket: int) -> np.int32:
+    """Centipawns from the side to move's view, given ready accumulators and
+    the output row for the position's piece count."""
+    out = B2[bucket]
     if stm == uint64(0):
         for i in range(HIDDEN):
             u = min(max(acc[0, i], float32(0.0)), float32(1.0))
             t = min(max(acc[1, i], float32(0.0)), float32(1.0))
-            out += W2[i] * u + W2[HIDDEN + i] * t
+            out += W2[bucket, i] * u + W2[bucket, HIDDEN + i] * t
     else:
         for i in range(HIDDEN):
             u = min(max(acc[1, i], float32(0.0)), float32(1.0))
             t = min(max(acc[0, i], float32(0.0)), float32(1.0))
-            out += W2[i] * u + W2[HIDDEN + i] * t
+            out += W2[bucket, i] * u + W2[bucket, HIDDEN + i] * t
     out *= float32(OUT_SCALE)
     if out > float32(3000.0):
         out = float32(3000.0)
@@ -198,4 +216,8 @@ def nn_eval(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.int32:
     by anything that has no accumulator to hand."""
     acc = np.empty((2, HIDDEN), dtype=np.float32)
     acc_refresh(mb, acc)
-    return nn_output(s[14], acc)
+    pieces = 0
+    for sq in range(64):
+        if mb[sq] != 12:
+            pieces += 1
+    return nn_output(s[14], acc, bucket_of(pieces))

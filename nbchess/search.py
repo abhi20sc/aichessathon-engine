@@ -49,7 +49,7 @@ from .core import (
 )
 from .evaltables import MATERIAL
 from .nnue import RESIDUAL as NN_RESIDUAL
-from .nnue import USE_NNUE, acc_copy, acc_update, nn_eval, nn_output
+from .nnue import USE_NNUE, acc_copy, acc_update, bucket_of, nn_eval, nn_output
 from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
 from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
 from .terms import (
@@ -424,7 +424,8 @@ def evaluate_acc(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     already maintained by the search. USE_NNUE is a compile-time constant,
     so the branch not taken costs nothing."""
     if USE_NNUE:
-        sc = nn_output(s[14], acc)                 # side to move's view
+        pieces = int64(popcount(s[12] | s[13]))
+        sc = nn_output(s[14], acc, bucket_of(pieces))   # side to move's view
         white = sc if s[14] == uint64(0) else -sc
         if NN_RESIDUAL:
             white += evaluate_raw(s, mb, WEIGHTS)

@@ -1,0 +1,16 @@
+2,913,639 positions loaded in 221s
+initial   train 0.015681  holdout 0.015727
+epoch  1  train 0.010790  holdout 0.011477  *  (32s)
+epoch  2  train 0.009463  holdout 0.010523  *  (30s)
+epoch  3  train 0.008849  holdout 0.010222  *  (30s)
+epoch  4  train 0.008473  holdout 0.010055  *  (30s)
+epoch  5  train 0.008175  holdout 0.009919  *  (31s)
+epoch  6  train 0.008074  holdout 0.009915  *  (30s)
+epoch  7  train 0.007978  holdout 0.009925  (31s)
+epoch  8  train 0.007902  holdout 0.009884  *  (30s)
+epoch  9  train 0.007797  holdout 0.009839  *  (31s)
+epoch 10  train 0.007752  holdout 0.009847  (31s)
+epoch 11  train 0.007736  holdout 0.009850  (31s)
+epoch 12  train 0.007693  holdout 0.009851  (30s)
+restored best epoch: holdout 0.009839
+wrote /home/claude/data/nnue_v10_s3.npz  (398,542 bytes)

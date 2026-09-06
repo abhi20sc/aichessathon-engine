@@ -24,7 +24,7 @@ PAD = 768          # padding index: a fixed zero row
 MAXP = 32          # pieces on the board, at most
 K = 0.9            # Texel K; cp -> probability
 SCALE = K * math.log(10.0) / 400.0
-LAMBDA = 0.7       # weight on the engine label versus the game result
+LAMBDA = 1.0       # weight on the engine label versus the game result
 PIECE = {c: i for i, c in enumerate("PNBRQKpnbrqk")}
 
 

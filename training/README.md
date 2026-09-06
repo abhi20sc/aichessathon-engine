@@ -74,7 +74,7 @@ ensembled: pair 0.016178 on the same 59,079-row holdout, against 0.016827
 for the v5 pair and 0.017277 for the v4 pair (hand evaluation 0.020343).
 Match result: **+31 +/- 40** over the v5 net, 300 games at 60 ms.
 
-### v7 net (5 Sep evening) - the shipped net
+### v7 net (5 Sep evening)
 
 Same recipe, 12 epochs, on 1,563,204 positions (files at 15:45 UTC). From
 13:45 UTC the pipeline ran with `--late-weight 3 --per-game 32`, which
@@ -89,3 +89,21 @@ and 0.015219), ensembled: 0.014517 on the 78,161-row holdout against
 The shipped file carries `scale = 0.7`: the engine multiplies the network's
 output by 0.7 before adding it to the hand evaluation. Measured against the
 undamped net at 60 ms: 0.8 +44 +/- 40, 0.65 +34 +/- 40, 1.3 -112 +/- 82.
+
+### v10 net (6 Sep morning) - the shipped net
+
+Three recipe changes, each measured on its own before going in:
+
+- Output buckets: the last layer has one row of weights per piece-count
+  bucket (<= 12 pieces, 13-22, 23+), so endings are scored by weights fitted
+  only on endings. Free at inference. +17 +/- 40 over the single-row net.
+- Labels are the labelling engine's score alone (`tools/nnue_train_l10.py`,
+  LAMBDA = 1.0) instead of a 70/30 blend with the game result: +39 +/- 50.
+- The shipped file carries `scale = 0.7` (see above).
+
+Trained on 2,913,639 positions (the four laptop files at 05:17 UTC, 6 Sep):
+about 1.1M from the endgame-weighted sampler and 294k from the rated
+openings sampler (`--start-fens`). Seeds 1 and 3 (`train_v10_s1.log`,
+`train_v10_s3.log`; clean holdout 0.009869 and 0.009839 - the pure-engine
+target is a different loss scale from the earlier logs), ensembled.
+Match result: **+70 +/- 48** over the v9 net after 210 games at 60 ms.
