@@ -1,0 +1,16 @@
+6,673,489 positions loaded in 272s
+initial   train 0.016364  holdout 0.015764
+epoch  1  train 0.010013  holdout 0.010137  *  (72s)
+epoch  2  train 0.009248  holdout 0.009544  *  (70s)
+epoch  3  train 0.008881  holdout 0.009289  *  (69s)
+epoch  4  train 0.008638  holdout 0.009090  *  (67s)
+epoch  5  train 0.008391  holdout 0.008976  *  (69s)
+epoch  6  train 0.008320  holdout 0.008925  *  (68s)
+epoch  7  train 0.008284  holdout 0.008904  *  (69s)
+epoch  8  train 0.008214  holdout 0.008847  *  (68s)
+epoch  9  train 0.008128  holdout 0.008806  *  (68s)
+epoch 10  train 0.008090  holdout 0.008800  *  (69s)
+epoch 11  train 0.008093  holdout 0.008793  *  (67s)
+epoch 12  train 0.008043  holdout 0.008776  *  (68s)
+restored best epoch: holdout 0.008776
+wrote /home/claude/data/nnue_mir_s1.npz  (398,542 bytes)

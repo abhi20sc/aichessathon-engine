@@ -44,8 +44,8 @@ def bucket_of(pieces: int) -> int:
 def featurise(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
     """Indices for the white and black perspectives, and side to move."""
     rows, stm = fen.split()[0], fen.split()[1]
-    w = np.full(MAXP, PAD, dtype=np.int64)
-    b = np.full(MAXP, PAD, dtype=np.int64)
+    w = np.full(MAXP, PAD, dtype=np.int32)
+    b = np.full(MAXP, PAD, dtype=np.int32)
     n = 0
     rank = 7
     for row in rows.split("/"):
@@ -65,8 +65,8 @@ def featurise(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
     return w, b, 0 if stm == "w" else 1
 
 
-def load(paths: list[Path], limit: int | None, residual: bool,
-         ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load(paths: list[Path], limit: int | None, residual: bool, mirror: bool = False,
+         ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Positions, targets and - for a residual net - the hand evaluation the
     network is trained to correct, all from the side to move's view."""
     if residual:
@@ -96,9 +96,25 @@ def load(paths: list[Path], limit: int | None, residual: bool,
                 break
         if limit and len(T) >= limit:
             break
-    return (np.stack(W), np.stack(B), np.array(S, dtype=np.int64),
-            np.array(T, dtype=np.float32), np.array(E, dtype=np.float32),
-            np.array(K, dtype=np.int64))
+    W2, B2 = np.stack(W), np.stack(B)
+    S2, T2, E2, K2 = (np.array(S, dtype=np.int64), np.array(T, dtype=np.float32),
+                      np.array(E, dtype=np.float32), np.array(K, dtype=np.int64))
+    n_hold = len(T2) // 20
+    if mirror:
+        # Mirror every position left-right: same label, same side to move,
+        # every square sq -> sq ^ 7 (castling rights aside, chess is symmetric).
+        # Doubles the data for free; hold-out rows are not mirrored.
+        n = len(T2)
+        cut = n - n // 20
+        def flip(a: np.ndarray) -> np.ndarray:
+            f = a[:cut].copy()
+            real = f < PAD
+            f[real] = (f[real] & ~7) | (7 - (f[real] & 7))
+            return f
+        W2 = np.concatenate([flip(W2), W2]); B2 = np.concatenate([flip(B2), B2])
+        S2 = np.concatenate([S2[:cut], S2]); T2 = np.concatenate([T2[:cut], T2])
+        E2 = np.concatenate([E2[:cut], E2]); K2 = np.concatenate([K2[:cut], K2])
+    return (W2, B2, S2, T2, E2, K2, n_hold)
 
 
 class Net(torch.nn.Module):
@@ -137,20 +153,22 @@ def main() -> None:
                     help="train the net to correct the hand evaluation rather than replace it")
     ap.add_argument("--wd", type=float, default=1e-4, help="AdamW weight decay")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--mirror", action="store_true",
+                    help="add the left-right mirror of every training position")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
 
     t0 = time.perf_counter()
-    W, B, S, T, E, K = load(args.data, args.limit, args.residual)
+    W, B, S, T, E, K, n_hold = load(args.data, args.limit, args.residual, args.mirror)
     n = len(T)
     print(f"{n:,} positions loaded in {time.perf_counter() - t0:.0f}s", flush=True)
     # Hold out the LAST 5% as a contiguous block. The pipeline writes many
     # positions per game, so a random split would put siblings of every
     # holdout position in the training set and the holdout would flatter
     # the net (and pick an overfitted epoch). Contiguous rows are whole games.
-    hold = np.arange(n - n // 20, n)
-    train = np.arange(0, n - n // 20)
+    hold = np.arange(n - n_hold, n)
+    train = np.arange(0, n - n_hold)
     W, B, S, T, E, K = (torch.from_numpy(x) for x in (W, B, S, T, E, K))
 
     net = Net(args.hidden)
@@ -162,7 +180,7 @@ def main() -> None:
             tot = 0.0
             for i in range(0, len(ix), 65536):
                 j = torch.from_numpy(ix[i:i + 65536])
-                p = torch.sigmoid((net(W[j], B[j], S[j], K[j]) + E[j]) * SCALE)
+                p = torch.sigmoid((net(W[j].long(), B[j].long(), S[j], K[j]) + E[j]) * SCALE)
                 tot += float(((p - T[j]) ** 2).sum())
             return tot / len(ix)
 
@@ -173,7 +191,7 @@ def main() -> None:
         perm = np.random.default_rng(ep).permutation(train)
         for i in range(0, len(perm), args.batch):
             j = torch.from_numpy(perm[i:i + args.batch])
-            p = torch.sigmoid((net(W[j], B[j], S[j], K[j]) + E[j]) * SCALE)
+            p = torch.sigmoid((net(W[j].long(), B[j].long(), S[j], K[j]) + E[j]) * SCALE)
             loss = ((p - T[j]) ** 2).mean()
             opt.zero_grad()
             loss.backward()

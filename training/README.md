@@ -90,7 +90,7 @@ The shipped file carries `scale = 0.7`: the engine multiplies the network's
 output by 0.7 before adding it to the hand evaluation. Measured against the
 undamped net at 60 ms: 0.8 +44 +/- 40, 0.65 +34 +/- 40, 1.3 -112 +/- 82.
 
-### v10 net (6 Sep morning) - the shipped net
+### v10 net (6 Sep morning)
 
 Three recipe changes, each measured on its own before going in:
 
@@ -111,3 +111,16 @@ Match result: **+50 +/- 40** over the v9 net, 300 games at 60 ms.
 For the v10 net the gain was re-tuned: 0.85 measured +37 +/- 40 over 0.7
 (300 games at 60 ms), 1.0 +20 +/- 54, 0.55 -29 +/- 61; the shipped file
 carries `scale = 0.85` from v12 on.
+
+### v14 net (6 Sep afternoon) - the shipped net
+
+Same recipe as v10 with two additions in `tools/nnue_train_l10.py`:
+`--mirror` adds the left-right mirror of every training position (same
+label; squares mapped sq -> sq ^ 7), which doubles the data for free and
+took the clean holdout from 0.00929 to 0.00878; and the set is 3,422,302
+positions (files at 10:28 UTC, 6 Sep; 104k of them played from the Closed
+Sicilian start positions, 384k from the other rated openings). Seeds 1 and
+3 (`train_v14_s1.log`, `train_v14_s3.log`; holdout 0.008776 and 0.008788),
+ensembled at gain 0.85. Match results vs the v12 net: +24 +/- 40 at 60 ms
+(300 games), +3 +/- 69 at 400 ms (100 games). A hidden-256 net on the same
+data (holdout 0.00941) was not better and was not shipped.
