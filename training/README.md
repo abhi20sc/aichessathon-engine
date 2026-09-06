@@ -106,4 +106,4 @@ about 1.1M from the endgame-weighted sampler and 294k from the rated
 openings sampler (`--start-fens`). Seeds 1 and 3 (`train_v10_s1.log`,
 `train_v10_s3.log`; clean holdout 0.009869 and 0.009839 - the pure-engine
 target is a different loss scale from the earlier logs), ensembled.
-Match result: **+70 +/- 48** over the v9 net after 210 games at 60 ms.
+Match result: **+50 +/- 40** over the v9 net, 300 games at 60 ms.
