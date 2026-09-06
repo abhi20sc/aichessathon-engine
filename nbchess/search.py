@@ -798,7 +798,7 @@ def quiesce(
         if not make(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
             continue
         if USE_NNUE:
-            acc_update(acc[ply], acc[ply + 1], mbs[ply], s[14], mv)
+            acc_update(acc[ply], acc[ply + 1], mbs[ply], mbs[ply + 1], s[14], mv)
         sc = -quiesce(stack, mbs, buf, sbuf, ply + 1, -beta, -alpha, ctl, tbuf, acc)
         if ctl[C_STOPPED] == 1:
             return alpha
@@ -1071,7 +1071,7 @@ def negamax(
         new_depth = depth - 1 + (extension if mv == tt_mv else 0)
         killers[ply, 2] = mv                     # what the child is replying to
         if USE_NNUE:
-            acc_update(acc[ply], acc[ply + 1], mbs[ply], us, mv)
+            acc_update(acc[ply], acc[ply + 1], mbs[ply], mbs[ply + 1], us, mv)
         legal += 1
         if is_quiet and quiets < 64:
             quiet_list[quiets] = mv
@@ -1181,7 +1181,7 @@ def search_root(
             continue
         killers[0, 2] = mv
         if USE_NNUE:
-            acc_update(acc[0], acc[1], mbs[0], s[14], mv)
+            acc_update(acc[0], acc[1], mbs[0], mbs[1], s[14], mv)
         if count == 0:
             sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
                           tt_bound, killers, history, counter, rep, evals, 1, depth - 1,

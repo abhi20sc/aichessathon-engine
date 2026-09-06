@@ -124,3 +124,14 @@ Sicilian start positions, 384k from the other rated openings). Seeds 1 and
 ensembled at gain 0.85. Match results vs the v12 net: +24 +/- 40 at 60 ms
 (300 games), +3 +/- 69 at 400 ms (100 games). A hidden-256 net on the same
 data (holdout 0.00941) was not better and was not shipped.
+
+### v16 net (6 Sep evening) - the shipped net from v15 on
+
+Same recipe as the v14 net (mirror, output buckets, pure engine labels,
+gain 0.85) on 3,877,713 positions: the 3.42M set above plus 439k more from
+the rated-openings sampler (`nn_mac4.txt` rows 388,149-827,551), the rest of
+the Closed Sicilian file and the first rows of the random-ending sampler
+(`--endgames`, `nn_mac6.txt`). Seeds 1 and 3 (`train_v16_s1.log`,
+`train_v16_s3.log`), 14 epochs each, best epoch restored. The holdout is
+the last 5% of the file, which here is 194k rated-opening rows none of the
+earlier nets saw: v14 net 0.008146, v16 seeds 0.008006 and 0.008013.

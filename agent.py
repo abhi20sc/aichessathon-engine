@@ -32,6 +32,14 @@ INITIAL_OVERHEAD_MS = 200.0
 INCREMENT_MS = 500.0
 #: Centipawn score above which a draw is a bad outcome worth steering around.
 WINNING_MARGIN_CP = 80
+#: A position that has scored within this of level for this many of our moves
+#: in a row, past this ply, is being held rather than fought: spend this
+#: fraction of the budget there and keep the rest for when the game turns.
+#: Round 42 ran the clock from 30 s to 2 s over sixty moves of a dead draw.
+FLAT_CP = 20
+FLAT_MOVES = 10
+FLAT_FROM_PLY = 60
+FLAT_SHARE = 0.6
 
 _engine = None
 _engine_error: str | None = None
@@ -171,6 +179,7 @@ PONDER = False
 
 _tracker = GameTracker()
 _overhead_ms = INITIAL_OVERHEAD_MS
+_flat_moves = 0
 _ponderer = Ponderer(_engine) if (_engine is not None and PONDER) else None
 
 
@@ -225,7 +234,7 @@ def _fallback(board: chess.Board) -> str:
 def get_move(fen: str, time_left_ms: int) -> str:
     """Return a legal move in UCI notation. This function must never raise."""
     entered = time.perf_counter()
-    global _overhead_ms
+    global _overhead_ms, _flat_moves
 
     if _ponderer is not None:
         try:
@@ -252,8 +261,15 @@ def get_move(fen: str, time_left_ms: int) -> str:
             # move seven reads as ply twelve when the referee says zero.
             game_ply = len(tracked.move_stack)
             soft, hard = allocate(float(time_left_ms), INCREMENT_MS, _overhead_ms, game_ply)
+            if _flat_moves >= FLAT_MOVES and game_ply >= FLAT_FROM_PLY:
+                soft *= FLAT_SHARE
+                hard *= FLAT_SHARE
             ranked = _engine.think(fen, budget_ms=soft, hard_ms=hard, history=history,
                                    game_ply=game_ply)
+            if ranked and abs(ranked[0][1]) <= FLAT_CP:
+                _flat_moves += 1
+            else:
+                _flat_moves = 0
             candidate = _choose(tracked, ranked)
             if candidate in legal:
                 chosen = candidate

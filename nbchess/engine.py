@@ -16,7 +16,7 @@ import numpy as np
 from .clock import available as clock_available
 from .clock import new_timebuf, now_ns
 from .fen import new_stack, set_fen
-from .nnue import HIDDEN, acc_refresh
+from .nnue import ACC_W, acc_refresh
 from .search import (
     C_CONTEMPT,
     C_DEADLINE,
@@ -41,8 +41,8 @@ DEFAULT_OVERHEAD_MS = 200.0
 NPS_FLOOR = 150_000.0
 
 #: The clock is spread over the moves the game is expected to still last.
-MOVES_LEFT_FLOOR = 30
-MOVES_LEFT_START = 60
+MOVES_LEFT_FLOOR = 35
+MOVES_LEFT_START = 70
 
 #: Share of the increment spent on top of the clock share each move.
 INCREMENT_SHARE = 0.6
@@ -56,7 +56,7 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     Both are clamped so that we cannot spend more clock than we hold.
 
     The clock is spread over the moves the game is expected to still last:
-    sixty at the start, falling one per two plies, never below thirty, plus
+    seventy at the start, falling one per two plies, never below thirty-five, plus
     six tenths of the increment. An iteration may start whenever the soft
     budget is not yet spent; the hard ceiling, 2.5 times the budget, cuts
     it, and the search keeps what the cut iteration finished, so real spend
@@ -66,7 +66,14 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     was down to 1 s by move 40 in every long game (round 21 let a won
     position go at a second a move with 27 s on the clock); a 50-move spread
     left 55 s unused in a 47-move loss (round 25); a 45/22 spread with the
-    partial-iteration policy ran a 162-move game down to 2 s (round 31).
+    partial-iteration policy ran a 162-move game down to 2 s (round 31);
+    the 60/30 spread that followed had 8 s left at move 90 of a 118-move
+    defence and lost it on a depth-11 move (round 44), with half the rated
+    games running past move 70. 70/35 spends 2.5 s instead of 2.9 s on the
+    opening moves and has about 14 s instead of 8 s left at move 80; the
+    site's own reviews of the top ten show they spend slightly MORE than we
+    do early (3.3 s a move over the first twenty), so the early cut is kept
+    small.
     """
     usable = max(1.0, time_left_ms - overhead_ms)
     moves_left = max(MOVES_LEFT_FLOOR, MOVES_LEFT_START - game_ply // 2)
@@ -117,7 +124,7 @@ class Engine:
         self.evals = np.zeros(MAX_PLY, dtype=np.int32)
 
         self.ctl = np.zeros(12, dtype=np.int64)
-        self.acc = np.zeros((MAX_PLY, 2, HIDDEN), dtype=np.float32)   # network accumulators per ply
+        self.acc = np.zeros((MAX_PLY, 2, ACC_W), dtype=np.float32)   # network accumulators per ply
         self.tbuf = new_timebuf()
         self.out_moves = np.zeros(MAX_ROOT_MOVES, dtype=np.uint32)
         self.out_scores = np.zeros(MAX_ROOT_MOVES, dtype=np.int32)

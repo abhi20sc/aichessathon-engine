@@ -1,14 +1,18 @@
-"""Train a small NNUE-style evaluation on labelled positions.
+"""Train the king-bucketed NNUE-style evaluation on labelled positions.
 
-Rows are `fen|result|cp`, as written by tools.pipeline. The network is the
-simplest one that works: 768 piece-square inputs per perspective (own pieces
-first, then the opponent's, board flipped for Black), one shared hidden layer
-with clipped ReLU, and a linear output over the side-to-move and other-side
-accumulators. Output is in centipawns; the loss squashes it through the same
-sigmoid the Texel tuner uses so that the two evaluations share a scale.
+Rows are `fen|result|cp`, as written by tools.pipeline. Inputs are the 768
+piece-square features per perspective of tools.nnue_train_l10 (own pieces
+first, then the opponent's, board flipped for Black), taken relative to the
+perspective's own king: the board is mirrored left-right when that king is
+on files a-d, so a king always sits on e-h and a position and its mirror
+image are the same input, and the feature block is chosen by which of
+N_KB regions the king stands in. One shared hidden layer with clipped ReLU
+and a linear output per piece-count bucket over the side-to-move and
+other-side accumulators. Output is in centipawns; the loss squashes it
+through the same sigmoid the Texel tuner uses.
 
-    python -m tools.nnue_train --data a.txt b.txt --hidden 128 --epochs 10 \
-        --out nbchess/nnue.npz
+    python -m tools.nnue_train_kb --data a.txt b.txt --hidden 256 --epochs 30 \
+        --residual --out /tmp/nnue_kb.npz
 """
 from __future__ import annotations
 
@@ -20,7 +24,14 @@ from pathlib import Path
 import numpy as np
 import torch
 
-PAD = 768          # padding index: a fixed zero row
+#: King bucket of each square on the e-h half of the board (a-d is mirrored
+#: onto it): back-rank centre, back-rank corner, ranks 2-3, ranks 4-8.
+KB_TABLE = np.zeros(64, dtype=np.int64)
+for _sq in range(64):
+    _f, _r = _sq & 7, _sq >> 3
+    KB_TABLE[_sq] = (0 if _f < 6 else 1) if _r == 0 else (2 if _r < 3 else 3)
+N_KB = 4
+PAD = N_KB * 768   # padding index: a fixed zero row
 MAXP = 32          # pieces on the board, at most
 K = 0.9            # Texel K; cp -> probability
 SCALE = K * math.log(10.0) / 400.0
@@ -44,9 +55,7 @@ def bucket_of(pieces: int) -> int:
 def featurise(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
     """Indices for the white and black perspectives, and side to move."""
     rows, stm = fen.split()[0], fen.split()[1]
-    w = np.full(MAXP, PAD, dtype=np.int32)
-    b = np.full(MAXP, PAD, dtype=np.int32)
-    n = 0
+    pcs: list[tuple[int, int]] = []
     rank = 7
     for row in rows.split("/"):
         file = 0
@@ -54,18 +63,25 @@ def featurise(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
             if ch.isdigit():
                 file += int(ch)
                 continue
-            pc = PIECE[ch]
-            colour, ptype = pc // 6, pc % 6
-            sq = rank * 8 + file
-            w[n] = colour * 384 + ptype * 64 + sq
-            b[n] = (1 - colour) * 384 + ptype * 64 + (sq ^ 56)
-            n += 1
+            pcs.append((PIECE[ch], rank * 8 + file))
             file += 1
         rank -= 1
-    return w, b, 0 if stm == "w" else 1
+    out = []
+    for p in (0, 1):
+        ksq = next(sq for pc, sq in pcs if pc == p * 6 + 5)
+        ksq = ksq if p == 0 else ksq ^ 56
+        mirror = 7 if (ksq & 7) < 4 else 0
+        base = int(KB_TABLE[ksq ^ mirror]) * 768
+        a = np.full(MAXP, PAD, dtype=np.int32)
+        for n, (pc, sq) in enumerate(pcs):
+            colour, ptype = pc // 6, pc % 6
+            osq = (sq if p == 0 else sq ^ 56) ^ mirror
+            a[n] = base + (0 if colour == p else 1) * 384 + ptype * 64 + osq
+        out.append(a)
+    return out[0], out[1], 0 if stm == "w" else 1
 
 
-def load(paths: list[Path], limit: int | None, residual: bool, mirror: bool = False,
+def load(paths: list[Path], limit: int | None, residual: bool,
          ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Positions, targets and - for a residual net - the hand evaluation the
     network is trained to correct, all from the side to move's view."""
@@ -102,27 +118,15 @@ def load(paths: list[Path], limit: int | None, residual: bool, mirror: bool = Fa
                       np.array(E, dtype=np.float32), np.array(K, dtype=np.int64))
     del S, T, E, K
     n_hold = len(T2) // 20
-    if mirror:
-        # Mirror every position left-right: same label, same side to move,
-        # every square sq -> sq ^ 7 (castling rights aside, chess is symmetric).
-        # Doubles the data for free; hold-out rows are not mirrored.
-        n = len(T2)
-        cut = n - n // 20
-        def flip(a: np.ndarray) -> np.ndarray:
-            f = a[:cut].copy()
-            real = f < PAD
-            f[real] = (f[real] & ~7) | (7 - (f[real] & 7))
-            return f
-        W2 = np.concatenate([flip(W2), W2]); B2 = np.concatenate([flip(B2), B2])
-        S2 = np.concatenate([S2[:cut], S2]); T2 = np.concatenate([T2[:cut], T2])
-        E2 = np.concatenate([E2[:cut], E2]); K2 = np.concatenate([K2[:cut], K2])
+    # (the left-right mirror augmentation of nnue_train_l10 is a no-op here:
+    # king-relative inputs already see a position and its mirror as one)
     return (W2, B2, S2, T2, E2, K2, n_hold)
 
 
 class Net(torch.nn.Module):
     def __init__(self, hidden: int) -> None:
         super().__init__()
-        self.ft = torch.nn.EmbeddingBag(769, hidden, mode="sum", padding_idx=PAD)
+        self.ft = torch.nn.EmbeddingBag(PAD + 1, hidden, mode="sum", padding_idx=PAD)
         self.ft_bias = torch.nn.Parameter(torch.zeros(hidden))
         self.out = torch.nn.Linear(2 * hidden, N_BUCKETS)
         torch.nn.init.normal_(self.ft.weight, std=0.05)
@@ -155,14 +159,12 @@ def main() -> None:
                     help="train the net to correct the hand evaluation rather than replace it")
     ap.add_argument("--wd", type=float, default=1e-4, help="AdamW weight decay")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--mirror", action="store_true",
-                    help="add the left-right mirror of every training position")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
 
     t0 = time.perf_counter()
-    W, B, S, T, E, K, n_hold = load(args.data, args.limit, args.residual, args.mirror)
+    W, B, S, T, E, K, n_hold = load(args.data, args.limit, args.residual)
     n = len(T)
     print(f"{n:,} positions loaded in {time.perf_counter() - t0:.0f}s", flush=True)
     # Hold out the LAST 5% as a contiguous block. The pipeline writes many
@@ -215,7 +217,8 @@ def main() -> None:
     b1 = net.ft_bias.detach().numpy().astype(np.float32)
     w2 = net.out.weight.detach().numpy().astype(np.float32) / SCALE      # buckets x 2H, in cp
     b2 = (net.out.bias.detach().numpy() / SCALE).astype(np.float32)      # buckets
-    np.savez(args.out, w1=w1, b1=b1, w2=w2, b2=b2, residual=np.int32(1 if args.residual else 0))
+    np.savez(args.out, w1=w1, b1=b1, w2=w2, b2=b2, residual=np.int32(1 if args.residual else 0),
+             kb=KB_TABLE.astype(np.float32))
     print(f"wrote {args.out}  ({args.out.stat().st_size:,} bytes)")
 
 

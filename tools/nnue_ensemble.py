@@ -42,11 +42,15 @@ def main() -> None:
     b2 = (sum(np.atleast_1d(z["b2"]).astype(np.float32) for z in zs) / k).astype(np.float32)
     scale = np.float32(args.scale) if args.scale is not None else (
         zs[0]["scale"] if "scale" in zs[0] else np.float32(1.0))
-    save_safetensors(args.out, {
+    tensors = {
         "w1": w1, "b1": b1, "w2": w2,
         "b2": np.asarray(b2, dtype=np.float32).reshape(-1),
         "residual": np.asarray([float(zs[0]["residual"])], dtype=np.float32),
-        "scale": np.asarray([float(scale)], dtype=np.float32)})
+        "scale": np.asarray([float(scale)], dtype=np.float32)}
+    if "kb" in zs[0]:                       # king-bucketed inputs: ship the bucket table
+        assert all("kb" in z and np.array_equal(z["kb"], zs[0]["kb"]) for z in zs)
+        tensors["kb"] = np.asarray(zs[0]["kb"], dtype=np.float32)
+    save_safetensors(args.out, tensors)
     print(f"wrote {args.out}: {k} nets, hidden {k * h}, {nb} output bucket(s), scale {float(scale)}")
 
 
