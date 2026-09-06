@@ -135,3 +135,20 @@ the Closed Sicilian file and the first rows of the random-ending sampler
 `train_v16_s3.log`), 14 epochs each, best epoch restored. The holdout is
 the last 5% of the file, which here is 194k rated-opening rows none of the
 earlier nets saw: v14 net 0.008146, v16 seeds 0.008006 and 0.008013.
+
+### 256-wide net (7 Sep, shipped in v15)
+
+`train_w256_s1.log`: hidden 256, 30 epochs (learning rate halved every ten),
+otherwise the v14/v16 recipe on the same 3,877,713 positions. Holdout
+0.007817 against 0.008006 for the 128-wide net on the same rows; node speed
+unchanged; +7 +/- 44 over the v14 net in 300 games at 60 ms.
+
+### King-relative inputs (7 Sep, not shipped)
+
+`tools/nnue_train_kb.py` trains a net whose 768 features are taken relative
+to each side's own king (board mirrored so the king is on files e-h, four
+king regions selecting separate feature blocks); `nbchess/nnue.py` can run
+such a net. Two runs on the 3.88M set (hidden 256; weight decay 1e-4 then
+1e-3 with a lower learning rate) both overfitted: training loss 0.0053
+against a holdout that never improved past 0.0092. Four times the input
+weights want far more data than we have; the plain net stays.
