@@ -152,3 +152,18 @@ such a net. Two runs on the 3.88M set (hidden 256; weight decay 1e-4 then
 1e-3 with a lower learning rate) both overfitted: training loss 0.0053
 against a holdout that never improved past 0.0092. Four times the input
 weights want far more data than we have; the plain net stays.
+
+### v16 net (7 Sep midday) - the shipped net from v16 on
+
+The 256-wide recipe on 5,303,101 positions: everything above plus the
+night's rows (general 1.27M/1.27M/1.10M, rated openings 1.14M, Closed
+Sicilian 281k, random endings 626k, less a fixed 194k-row holdout of
+rated-opening positions kept out of every training set so nets can be
+compared). `train_w256v10_s1.log`; loader rewritten to preallocate (the
+list-of-arrays version ran out of memory at this size). Fixed-holdout loss
+0.007441 (v15 net 0.007817, v14 net 0.008146). Match results against the
+v15 net from the rated openings: +12 (-12..+35) over 600 games at 60 ms.
+The same data without the random-ending rows gave 0.007548 and the same
++12, so the ending rows stay. At 400 ms the v15 build measured +28
+(-9..+65) over v14 in 200 games, so the network gains show a little more
+at depth than at 60 ms.

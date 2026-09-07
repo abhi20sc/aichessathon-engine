@@ -35,6 +35,31 @@ def load(path: Path, alias: str):
     return importlib.import_module(f"{alias}.engine")
 
 
+def book_openings(path: Path, count: int, seed: int = 17) -> list[str]:
+    """Positions from a book of start FENs (the rated openings), each varied
+    by up to two random legal plies so that repeated games differ, and kept
+    within a pawn of level. Closer to the ladder than random-move starts."""
+    rng = random.Random(seed)
+    book = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    out: list[str] = []
+    while len(out) < count:
+        b = chess.Board(rng.choice(book))
+        for _ in range(rng.choice((0, 1, 2, 2))):
+            moves = list(b.legal_moves)
+            if not moves:
+                break
+            b.push(rng.choice(moves))
+        if b.is_game_over():
+            continue
+        vals = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+                chess.ROOK: 5, chess.QUEEN: 9}
+        bal = sum(v * (len(b.pieces(p, chess.WHITE)) - len(b.pieces(p, chess.BLACK)))
+                  for p, v in vals.items())
+        if abs(bal) <= 1:
+            out.append(b.fen())
+    return out
+
+
 def openings(count: int, seed: int = 17) -> list[str]:
     """Near-level positions a few moves in. Rated games start from curated
     openings rather than the initial position, so testing from the start would
@@ -200,6 +225,8 @@ def main() -> None:
                     help="let A think on B's time (run on two cores)")
     ap.add_argument("--seed", type=int, default=17,
                     help="opening seed; change it for an independent sample")
+    ap.add_argument("--book", type=Path, default=None,
+                    help="file of start FENs to open from instead of random-move positions")
     args = ap.parse_args()
 
     t = time.perf_counter()
@@ -210,7 +237,8 @@ def main() -> None:
     aa, ab_ = mod_a.allocate, mod_b.allocate
     print(f"both engines compiled in {time.perf_counter() - t:.0f}s", flush=True)
 
-    fens = openings((args.games + 1) // 2, seed=args.seed)
+    fens = (book_openings(args.book, (args.games + 1) // 2, seed=args.seed) if args.book
+            else openings((args.games + 1) // 2, seed=args.seed))
     wins = draws = losses = 0
     started = time.perf_counter()
     for i in range(args.games):

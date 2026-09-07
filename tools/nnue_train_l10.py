@@ -74,33 +74,48 @@ def load(paths: list[Path], limit: int | None, residual: bool, mirror: bool = Fa
         from nbchess.search import evaluate_w
         from nbchess.terms import WEIGHTS
         st, mbs, _ = new_stack()
-    W, B, S, T, E, K = [], [], [], [], [], []
+    # Two passes: count, then fill preallocated arrays. Building a Python
+    # list of five million small arrays first needs more memory than the
+    # arrays themselves, and that is what ran out at 5.3M rows.
+    total = 0
     for p in paths:
-        for line in p.read_text().splitlines():
-            parts = line.split("|")
-            if len(parts) < 3:
-                continue
-            fen, result, cp = parts[0], float(parts[1]), float(parts[2])
-            w, b, stm = featurise(fen)
-            W.append(w); B.append(b); S.append(stm); K.append(bucket_of(int((w < PAD).sum())))
-            # target from White's view, then flipped to side-to-move below
-            p_cp = 1.0 / (1.0 + math.exp(-cp * SCALE))
-            t = LAMBDA * p_cp + (1.0 - LAMBDA) * result
-            T.append(t if stm == 0 else 1.0 - t)
-            if residual:
-                set_fen(st[0], mbs[0], fen)
-                E.append(float(evaluate_w(st[0], mbs[0], WEIGHTS)))
-            else:
-                E.append(0.0)
-            if limit and len(T) >= limit:
-                break
-        if limit and len(T) >= limit:
+        with p.open() as fh:
+            for line in fh:
+                if line.count("|") >= 2:
+                    total += 1
+    if limit:
+        total = min(total, limit)
+    W2 = np.full((total, MAXP), PAD, dtype=np.int32)
+    B2 = np.full((total, MAXP), PAD, dtype=np.int32)
+    S2 = np.zeros(total, dtype=np.int64)
+    T2 = np.zeros(total, dtype=np.float32)
+    E2 = np.zeros(total, dtype=np.float32)
+    K2 = np.zeros(total, dtype=np.int64)
+    i = 0
+    for p in paths:
+        with p.open() as fh:
+            for line in fh:
+                parts = line.split("|")
+                if len(parts) < 3:
+                    continue
+                if i >= total:
+                    break
+                fen, result, cp = parts[0], float(parts[1]), float(parts[2])
+                w, b, stm = featurise(fen)
+                W2[i] = w
+                B2[i] = b
+                S2[i] = stm
+                K2[i] = bucket_of(int((w < PAD).sum()))
+                p_cp = 1.0 / (1.0 + math.exp(-cp * SCALE))
+                t = LAMBDA * p_cp + (1.0 - LAMBDA) * result
+                T2[i] = t if stm == 0 else 1.0 - t
+                if residual:
+                    set_fen(st[0], mbs[0], fen)
+                    E2[i] = float(evaluate_w(st[0], mbs[0], WEIGHTS))
+                i += 1
+        if i >= total:
             break
-    W2, B2 = np.stack(W), np.stack(B)
-    del W, B                      # the per-row arrays are the peak of memory use
-    S2, T2, E2, K2 = (np.array(S, dtype=np.int64), np.array(T, dtype=np.float32),
-                      np.array(E, dtype=np.float32), np.array(K, dtype=np.int64))
-    del S, T, E, K
+    W2, B2, S2, T2, E2, K2 = W2[:i], B2[:i], S2[:i], T2[:i], E2[:i], K2[:i]
     n_hold = len(T2) // 20
     if mirror:
         # Mirror every position left-right: same label, same side to move,
