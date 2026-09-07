@@ -42,16 +42,11 @@ DEFAULT_OVERHEAD_MS = 200.0
 NPS_FLOOR = 150_000.0
 
 #: The clock is spread over the moves the game is expected to still last.
-MOVES_LEFT_FLOOR = 35
-MOVES_LEFT_START = 70
+MOVES_LEFT_FLOOR = 30
+MOVES_LEFT_START = 60
 
 #: Share of the increment spent on top of the clock share each move.
 INCREMENT_SHARE = 0.6
-
-#: A search whose score has fallen this far below the previous move's may
-#: run to this multiple of its budget (the hard ceiling still applies).
-TROUBLE_DROP_CP = 40
-TROUBLE_SHARE = 1.8
 
 
 def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
@@ -62,7 +57,7 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     Both are clamped so that we cannot spend more clock than we hold.
 
     The clock is spread over the moves the game is expected to still last:
-    seventy at the start, falling one per two plies, never below thirty-five, plus
+    sixty at the start, falling one per two plies, never below thirty, plus
     six tenths of the increment. An iteration may start whenever the soft
     budget is not yet spent; the hard ceiling, 2.5 times the budget, cuts
     it, and the search keeps what the cut iteration finished, so real spend
@@ -72,14 +67,13 @@ def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
     was down to 1 s by move 40 in every long game (round 21 let a won
     position go at a second a move with 27 s on the clock); a 50-move spread
     left 55 s unused in a 47-move loss (round 25); a 45/22 spread with the
-    partial-iteration policy ran a 162-move game down to 2 s (round 31);
-    the 60/30 spread that followed had 8 s left at move 90 of a 118-move
-    defence and lost it on a depth-11 move (round 44), with half the rated
-    games running past move 70. 70/35 spends 2.5 s instead of 2.9 s on the
-    opening moves and has about 14 s instead of 8 s left at move 80; the
-    site's own reviews of the top ten show they spend slightly MORE than we
-    do early (3.3 s a move over the first twenty), so the early cut is kept
-    small.
+    partial-iteration policy ran a 162-move game down to 2 s (round 31).
+    60/30 is the spread that scored +327 on the ladder on 6 Sep; a 70/35
+    spread with a "dead position" discount (v15-v16) and a score-drop
+    extension (v17-v18) both lost games on 7 Sep - the first by thinking
+    less in balanced middlegames, the second by spending 1.5-1.7 times the
+    budget early and reaching move 40 with 28 s. Real spend runs at about
+    1.2 times the budget under this scheme, which is what the top ten do.
     """
     usable = max(1.0, time_left_ms - overhead_ms)
     moves_left = max(MOVES_LEFT_FLOOR, MOVES_LEFT_START - game_ply // 2)
@@ -137,9 +131,6 @@ class Engine:
                                self.evals, self.ctl, self.tbuf, self.acc,
                                self.out_moves, self.out_scores)
         self.overhead_ms = DEFAULT_OVERHEAD_MS
-        #: Best score of the previous search, from the mover's view: a search
-        #: whose score falls well below it is in trouble and gets more time.
-        self.prev_score = 0
         self.nps = 1_500_000.0
         self.depth_reached = 0
         self.nodes_last = 0
@@ -155,7 +146,6 @@ class Engine:
         self.history[:] = 0
         self.killers[:] = 0
         self.counter[:] = 0
-        self.prev_score = 0
 
     def abort(self) -> None:
         """Raise the kernel's stop flag from another thread. The search polls
@@ -206,7 +196,6 @@ class Engine:
         prev_best = ""
         stable = 0
         score = 0
-        trouble = False
 
         for depth in range(1, max_depth + 1):
             if stop is not None and stop.is_set():
@@ -277,23 +266,12 @@ class Engine:
             if stop is not None:               # pondering: only the clock above ends it
                 continue
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            # A search that keeps changing its mind deserves more time, and
-            # so does one whose score has just fallen: the move it is about
-            # to play may be the one that loses (round 51 played a two-move
-            # fork into a knight at depth 15 on 1.2 s with 54 s in hand; two
-            # plies more saw it). A settled best move earns only a small
-            # discount, since a quiet move can hide a tactic as easily as a
-            # sharp one.
-            if score < self.prev_score - TROUBLE_DROP_CP:
-                trouble = True
-            soft = budget_ms * (TROUBLE_SHARE if trouble
-                                else 1.20 - 0.02 * min(stable, 10))
+            # a search that keeps changing its mind deserves more time
+            soft = budget_ms * (1.20 - 0.04 * min(stable, 10))
             if elapsed_ms > soft:
                 break
 
         spent = time.perf_counter() - started
-        if stop is None:                       # a real search, not a ponder
-            self.prev_score = score
         self.last_search_ms = spent * 1000.0
         self.nodes_last = int(self.ctl[C_NODES])
         if spent > 0.02 and self.nodes_last > 20_000:
