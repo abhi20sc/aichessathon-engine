@@ -125,7 +125,7 @@ def _feat(p: int, pc: int, sq: int, base: int, m: int) -> int:
     return base + (0 if colour == p else 1) * 384 + ptype * 64 + osq
 
 
-@njit(int64(int8[:], float32[:, ::1], int64), cache=False, nogil=True)
+@njit(int64(int8[:], float32[:, ::1], int64), cache=False, fastmath=True, nogil=True)
 def _refresh_side(mb: npt.NDArray[np.int8], acc: npt.NDArray[np.float32], p: int) -> int:
     """Perspective `p`'s accumulator from scratch."""
     ksq = 0
@@ -149,7 +149,7 @@ def _refresh_side(mb: npt.NDArray[np.int8], acc: npt.NDArray[np.float32], p: int
     return 0
 
 
-@njit(int64(int8[:], float32[:, ::1]), cache=False, nogil=True)
+@njit(int64(int8[:], float32[:, ::1]), cache=False, fastmath=True, nogil=True)
 def acc_refresh(mb: npt.NDArray[np.int8], acc: npt.NDArray[np.float32]) -> int:
     """Both perspectives' accumulators from scratch: acc[0] is White's view,
     acc[1] Black's. Done once at the root; the search updates incrementally."""
@@ -158,7 +158,8 @@ def acc_refresh(mb: npt.NDArray[np.int8], acc: npt.NDArray[np.float32]) -> int:
     return 0
 
 
-@njit(int64(float32[:, ::1], int64, int64, int64, int64), forceinline=True, cache=False, nogil=True)
+@njit(int64(float32[:, ::1], int64, int64, int64, int64), forceinline=True, cache=False,
+      fastmath=True, nogil=True)
 def _acc_piece(acc: npt.NDArray[np.float32], pc: int, sq: int, sign: int, p: int) -> int:
     """Add (sign +1) or remove (sign -1) piece `pc` on `sq` in view `p`."""
     idx = _feat(p, pc, sq, int64(acc[p, HIDDEN]), int64(acc[p, HIDDEN + 1]))
@@ -172,7 +173,7 @@ def _acc_piece(acc: npt.NDArray[np.float32], pc: int, sq: int, sign: int, p: int
 
 
 @njit(int64(float32[:, ::1], float32[:, ::1], int8[:], int8[:], uint64, uint32), cache=False,
-      nogil=True)
+      fastmath=True, nogil=True)
 def acc_update(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32],
                mb: npt.NDArray[np.int8], mb_child: npt.NDArray[np.int8],
                us: np.uint64, mv: np.uint32) -> int:
@@ -225,7 +226,7 @@ def acc_update(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32],
     return 0
 
 
-@njit(int64(float32[:, ::1], float32[:, ::1]), cache=False, nogil=True)
+@njit(int64(float32[:, ::1], float32[:, ::1]), cache=False, fastmath=True, nogil=True)
 def acc_copy(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32]) -> int:
     """A null move changes no piece: the child inherits the accumulators."""
     for i in range(ACC_W):
@@ -245,7 +246,7 @@ def bucket_of(pieces: int) -> int:
     return N_BUCKETS - 1
 
 
-@njit(int32(uint64, float32[:, ::1], int64), cache=False, nogil=True)
+@njit(int32(uint64, float32[:, ::1], int64), cache=False, fastmath=True, nogil=True)
 def nn_output(stm: np.uint64, acc: npt.NDArray[np.float32], bucket: int) -> np.int32:
     """Centipawns from the side to move's view, given ready accumulators and
     the output row for the position's piece count."""

@@ -51,7 +51,8 @@ def main() -> None:
         assert all("kb" in z and np.array_equal(z["kb"], zs[0]["kb"]) for z in zs)
         tensors["kb"] = np.asarray(zs[0]["kb"], dtype=np.float32)
     save_safetensors(args.out, tensors)
-    print(f"wrote {args.out}: {k} nets, hidden {k * h}, {nb} output bucket(s), scale {float(scale)}")
+    print(f"wrote {args.out}: {k} nets, hidden {k * h}, {nb} output bucket(s), "
+          f"scale {float(scale)}")
 
 
 if __name__ == "__main__":

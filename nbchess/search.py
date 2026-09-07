@@ -27,13 +27,13 @@ from numba.core.types import (
     boolean,
     float32,
     int8,
-    int16,
     int32,
     int64,
     uint8,
     uint32,
     uint64,
 )
+from numba.experimental import jitclass  # type: ignore[attr-defined]
 
 from .clock import now_ns
 from .core import (
@@ -691,6 +691,45 @@ def score_moves(
     return n
 
 
+@njit(int64(uint32[:], int32[:], int64, int64), cache=False, nogil=True)
+def sort_desc(moves: npt.NDArray[np.uint32], scores: npt.NDArray[np.int32],
+              lo: int, hi: int) -> int:
+    """Quicksort moves[lo:hi] by score, best first. Used once a node has
+    gone past its first few moves and will probably try them all: from
+    there one sort is cheaper than a selection pass per move."""
+    while hi - lo > 12:
+        pivot = scores[(lo + hi) // 2]
+        i = lo
+        j = hi - 1
+        while i <= j:
+            while scores[i] > pivot:
+                i += 1
+            while scores[j] < pivot:
+                j -= 1
+            if i <= j:
+                scores[i], scores[j] = scores[j], scores[i]
+                moves[i], moves[j] = moves[j], moves[i]
+                i += 1
+                j -= 1
+        if j - lo < hi - i:
+            sort_desc(moves, scores, lo, j + 1)
+            lo = i
+        else:
+            sort_desc(moves, scores, i, hi)
+            hi = j + 1
+    for i in range(lo + 1, hi):                  # insertion sort for the rest
+        sc = scores[i]
+        mv = moves[i]
+        j = i - 1
+        while j >= lo and scores[j] < sc:
+            scores[j + 1] = scores[j]
+            moves[j + 1] = moves[j]
+            j -= 1
+        scores[j + 1] = sc
+        moves[j + 1] = mv
+    return 0
+
+
 @njit(int64(uint32[:], int32[:], int64, int64), forceinline=True, cache=False, nogil=True)
 def pick_best(
         moves: npt.NDArray[np.uint32],
@@ -731,76 +770,112 @@ def hist_update(
     return np.int32(history[us, frm, to])
 
 
-@njit(int32(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :], int64, int32, int32,
-            int64[:], int64[::1], float32[:, :, ::1]), cache=False, nogil=True)
-def quiesce(
-        stack: npt.NDArray[np.uint64],
-        mbs: npt.NDArray[np.int8],
-        buf: npt.NDArray[np.uint32],
-        sbuf: npt.NDArray[np.int32],
-        ply: int,
-        alpha: np.int32,
-        beta: np.int32,
-        ctl: npt.NDArray[np.int64],
-        tbuf: npt.NDArray[np.int64],
-        acc: npt.NDArray[np.float32],
-) -> np.int32:
-    """Search captures only, so the evaluation is never measured mid-exchange."""
-    ctl[C_NODES] += 1
+#: Everything the search touches, in one object. A numba call copies every
+#: array argument by value (a dozen words each), and the search makes two or
+#: three calls per node; one reference to this object costs a single word.
+_CTX_SPEC = [
+    ("stack", uint64[:, ::1]), ("mbs", int8[:, ::1]), ("buf", uint32[:, ::1]),
+    ("sbuf", int32[:, ::1]), ("tt", uint64[:, ::1]), ("killers", uint32[:, ::1]),
+    ("history", int32[:, :, ::1]), ("counter", uint32[:, :, ::1]), ("rep", uint64[::1]),
+    ("evals", int32[::1]), ("ctl", int64[::1]), ("tbuf", int64[::1]),
+    ("acc", float32[:, :, ::1]), ("out_moves", uint32[::1]), ("out_scores", int32[::1]),
+]
+
+
+@jitclass(_CTX_SPEC)  # type: ignore[no-untyped-call]
+class SearchState:
+    def __init__(self, stack, mbs, buf, sbuf, tt, killers, history, counter, rep, evals,  # type: ignore[no-untyped-def]
+                 ctl, tbuf, acc, out_moves, out_scores):
+        self.stack = stack
+        self.mbs = mbs
+        self.buf = buf
+        self.sbuf = sbuf
+        self.tt = tt
+        self.killers = killers
+        self.history = history
+        self.counter = counter
+        self.rep = rep
+        self.evals = evals
+        self.ctl = ctl
+        self.tbuf = tbuf
+        self.acc = acc
+        self.out_moves = out_moves
+        self.out_scores = out_scores
+
+
+_CTX = SearchState.class_type.instance_type  # type: ignore[attr-defined]
+
+
+@njit(int32(_CTX, int64, int32, int32), cache=False, nogil=True)
+def quiesce(c: SearchState, ply: int, alpha: np.int32, beta: np.int32) -> np.int32:
+    """Search captures only, so the evaluation is never measured mid-exchange.
+    In check there is no standing pat: every evasion is searched, so a
+    check at the horizon is answered, not assumed away."""
+    c.ctl[C_NODES] += 1
     # The node-count test is the cheap gate: it keeps the clock syscall to one
     # poll per 2048 nodes, which measures at well under 0.1% of search time.
-    if (ctl[C_NODES] & 2047) == 0 and (
-            now_ns(tbuf) >= ctl[C_DEADLINE] or ctl[C_NODES] >= ctl[C_NODECAP]):
-        ctl[C_STOPPED] = 1
-    if ctl[C_STOPPED] == 1 or ply >= 120:
+    if (c.ctl[C_NODES] & 2047) == 0 and (
+            now_ns(c.tbuf) >= c.ctl[C_DEADLINE] or c.ctl[C_NODES] >= c.ctl[C_NODECAP]):
+        c.ctl[C_STOPPED] = 1
+    if c.ctl[C_STOPPED] == 1 or ply >= 120:
         return alpha
 
-    s = stack[ply]
-    stand = eval_adjusted(s, mbs[ply], acc[ply], ctl[C_GAMEPLY] + ply)
-    if stand >= beta:
-        return stand
-    if stand > alpha:
-        alpha = stand
+    s = c.stack[ply]
+    us = s[14]
+    in_check = attacked(s, lsb(s[us * uint64(6) + uint64(5)]), uint64(1) - us)
+    if in_check:
+        stand = int32(-MATE + ply)           # no standing pat: find an evasion
+    else:
+        stand = eval_adjusted(s, c.mbs[ply], c.acc[ply], c.ctl[C_GAMEPLY] + ply)
+        if stand >= beta:
+            return stand
+        if stand > alpha:
+            alpha = stand
 
-    n = gen_moves(s, mbs[ply], buf[ply])
-    # captures and promotions only, ordered by MVV-LVA
+    n = gen_moves(s, c.mbs[ply], c.buf[ply])
+    # captures and promotions only, ordered by MVV-LVA; every move in check
     for i in range(n):
-        mv = buf[ply][i]
+        mv = c.buf[ply][i]
         to = (mv >> uint32(6)) & uint32(63)
         frm = mv & uint32(63)
         promo = (mv >> uint32(12)) & uint32(7)
-        victim = mbs[ply][to]
+        victim = c.mbs[ply][to]
         if victim == 12 and ((mv >> uint32(15)) & uint32(7)) == uint32(1):
             victim = np.int8(0)
         if victim != 12:
-            sbuf[ply][i] = (int32(1_000_000) + int32(10) * MATERIAL[victim % 6]
-                            - MATERIAL[mbs[ply][frm] % 6])
+            c.sbuf[ply][i] = (int32(1_000_000) + int32(10) * MATERIAL[victim % 6]
+                            - MATERIAL[c.mbs[ply][frm] % 6])
         elif promo == uint32(4):
-            sbuf[ply][i] = int32(900_000)
+            c.sbuf[ply][i] = int32(900_000)
+        elif in_check:
+            c.sbuf[ply][i] = int32(1)
         else:
-            sbuf[ply][i] = int32(-1)
+            c.sbuf[ply][i] = int32(-1)
 
     best = stand
+    legal = 0
     for i in range(n):
-        pick_best(buf[ply], sbuf[ply], i, n)
-        if sbuf[ply][i] < int32(0):
+        pick_best(c.buf[ply], c.sbuf[ply], i, n)
+        if c.sbuf[ply][i] < int32(0):
             break
-        # delta pruning: even winning this material would not reach alpha
-        mv = buf[ply][i]
-        to = (mv >> uint32(6)) & uint32(63)
-        victim = mbs[ply][to]
-        gain = MATERIAL[victim % 6] if victim != 12 else int32(0)
-        if stand + gain + int32(200) < alpha:
+        mv = c.buf[ply][i]
+        if not in_check:
+            # delta pruning: even winning this material would not reach alpha
+            to = (mv >> uint32(6)) & uint32(63)
+            victim = c.mbs[ply][to]
+            gain = MATERIAL[victim % 6] if victim != 12 else int32(0)
+            if stand + gain + int32(200) < alpha:
+                continue
+            # a losing capture cannot rescue a quiet position
+            if not see_ge(s, c.mbs[ply], mv, int32(0)):
+                continue
+        if not make(c.stack[ply], c.mbs[ply], c.stack[ply + 1], c.mbs[ply + 1], mv):
             continue
-        # a losing capture cannot rescue a quiet position
-        if not see_ge(s, mbs[ply], mv, int32(0)):
-            continue
-        if not make(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
-            continue
+        legal += 1
         if USE_NNUE:
-            acc_update(acc[ply], acc[ply + 1], mbs[ply], mbs[ply + 1], s[14], mv)
-        sc = -quiesce(stack, mbs, buf, sbuf, ply + 1, -beta, -alpha, ctl, tbuf, acc)
-        if ctl[C_STOPPED] == 1:
+            acc_update(c.acc[ply], c.acc[ply + 1], c.mbs[ply], c.mbs[ply + 1], s[14], mv)
+        sc = -quiesce(c, ply + 1, -beta, -alpha)
+        if c.ctl[C_STOPPED] == 1:
             return alpha
         if sc > best:
             best = sc
@@ -808,6 +883,8 @@ def quiesce(
             alpha = sc
         if alpha >= beta:
             break
+    if in_check and legal == 0:
+        return int32(-MATE + ply)
     return best
 
 
@@ -859,87 +936,89 @@ def on_cutoff(killers: npt.NDArray[np.uint32], history: npt.NDArray[np.int32],
     return 0
 
 
-@njit(int64(uint64[:], uint32[:], int16[:], int8[:], uint8[:], uint64, uint64, int32,
-            int64, int64, uint8, uint32), cache=False, nogil=True)
-def tt_store(tt_key: npt.NDArray[np.uint64], tt_move: npt.NDArray[np.uint32],
-             tt_score: npt.NDArray[np.int16], tt_depth: npt.NDArray[np.int8],
-             tt_bound: npt.NDArray[np.uint8], idx: np.uint64, key: np.uint64,
+# The table is one array of (key, data) pairs so that a probe touches a
+# single cache line. data packs move (18 bits), score (16, two's complement),
+# depth (8) and bound (2).
+@njit(uint32(uint64), forceinline=True, cache=False, nogil=True)
+def tt_mv_of(data: np.uint64) -> np.uint32:
+    return uint32(data & uint64(0x3FFFF))
+
+
+@njit(int32(uint64), forceinline=True, cache=False, nogil=True)
+def tt_score_of(data: np.uint64) -> np.int32:
+    v = int32((data >> uint64(18)) & uint64(0xFFFF))
+    return v - int32(65536) if v >= int32(32768) else v
+
+
+@njit(int64(uint64), forceinline=True, cache=False, nogil=True)
+def tt_depth_of(data: np.uint64) -> int:
+    return int64((data >> uint64(34)) & uint64(0xFF))
+
+
+@njit(uint8(uint64), forceinline=True, cache=False, nogil=True)
+def tt_bound_of(data: np.uint64) -> np.uint8:
+    return uint8((data >> uint64(42)) & uint64(3))
+
+
+@njit(uint64(uint32, int32, int64, uint8), forceinline=True, cache=False, nogil=True)
+def tt_pack(mv: np.uint32, score: np.int32, depth: int, bound: np.uint8) -> np.uint64:
+    return (uint64(mv & uint32(0x3FFFF)) | (uint64(int64(score) & 0xFFFF) << uint64(18))
+            | (uint64(depth & 0xFF) << uint64(34)) | (uint64(bound) << uint64(42)))
+
+
+@njit(int64(uint64[:, ::1], uint64, uint64, int32, int64, int64, uint8, uint32),
+      cache=False, nogil=True)
+def tt_store(tt: npt.NDArray[np.uint64], idx: np.uint64, key: np.uint64,
              best: np.int32, ply: int, depth: int, bound: np.uint8,
              best_move: np.uint32) -> int:
     """Depth-preferred replacement; an exact-key match always wins its slot."""
-    same_key = tt_key[idx] == key
-    replace = (not same_key or int64(tt_depth[idx]) <= depth
+    same_key = tt[idx, 0] == key
+    old = tt[idx, 1]
+    replace = (not same_key or tt_depth_of(old) <= depth
                or bound == uint8(BOUND_EXACT))
     if replace:
-        tt_key[idx] = key
-        tt_score[idx] = int16(to_tt(best, ply))
-        tt_depth[idx] = int8(depth)
-        tt_bound[idx] = bound
         # a fail-low has no move worth keeping over one already stored here,
         # but a slot taken from another position must not keep its stale move
-        if bound != uint8(BOUND_UPPER) or not same_key:
-            tt_move[idx] = best_move
+        mv = best_move if (bound != uint8(BOUND_UPPER) or not same_key) else tt_mv_of(old)
+        tt[idx, 0] = key
+        tt[idx, 1] = tt_pack(mv, to_tt(best, ply), depth, bound)
     return 0
 
 
-@njit(int32(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
-            uint64[:], uint32[:], int16[:], int8[:], uint8[:],
-            uint32[:, :], int32[:, :, :], uint32[:, :, :], uint64[:], int32[:],
-            int64, int64, int32, int32, boolean, int64[:], int64[::1],
-            float32[:, :, ::1]), cache=False, nogil=True)
-def negamax(
-        stack: npt.NDArray[np.uint64],
-        mbs: npt.NDArray[np.int8],
-        buf: npt.NDArray[np.uint32],
-        sbuf: npt.NDArray[np.int32],
-        tt_key: npt.NDArray[np.uint64],
-        tt_move: npt.NDArray[np.uint32],
-        tt_score: npt.NDArray[np.int16],
-        tt_depth: npt.NDArray[np.int8],
-        tt_bound: npt.NDArray[np.uint8],
-        killers: npt.NDArray[np.uint32],
-        history: npt.NDArray[np.int32],
-        counter: npt.NDArray[np.uint32],
-        rep: npt.NDArray[np.uint64],
-        evals: npt.NDArray[np.int32],
-        ply: int,
-        depth: int,
-        alpha: np.int32,
-        beta: np.int32,
-        is_pv: bool,
-        ctl: npt.NDArray[np.int64],
-        tbuf: npt.NDArray[np.int64],
-        acc: npt.NDArray[np.float32],
-) -> np.int32:
-    ctl[C_NODES] += 1
+@njit(int32(_CTX, int64, int64, int32, int32, boolean), cache=False, nogil=True)
+def negamax(c: SearchState, ply: int, depth: int, alpha: np.int32, beta: np.int32,
+            is_pv: bool) -> np.int32:
+    c.stack = c.stack
+    c.rep = c.rep
+    c.ctl[C_NODES] += 1
     # The node-count test is the cheap gate: it keeps the clock syscall to one
     # poll per 2048 nodes, which measures at well under 0.1% of search time.
-    if (ctl[C_NODES] & 2047) == 0 and (
-            now_ns(tbuf) >= ctl[C_DEADLINE] or ctl[C_NODES] >= ctl[C_NODECAP]):
-        ctl[C_STOPPED] = 1
-    if ctl[C_STOPPED] == 1:
+    if (c.ctl[C_NODES] & 2047) == 0 and (
+            now_ns(c.tbuf) >= c.ctl[C_DEADLINE] or c.ctl[C_NODES] >= c.ctl[C_NODECAP]):
+        c.ctl[C_STOPPED] = 1
+    if c.ctl[C_STOPPED] == 1:
         return int32(0)
 
-    s = stack[ply]
+    s = c.stack[ply]
     us = s[14]
     them = uint64(1) - us
     key = s[18]
-    ridx = ctl[C_REPBASE] + ply
-    rep[ridx] = key
+    ridx = c.ctl[C_REPBASE] + ply
+    c.rep[ridx] = key
 
     # Contempt must be expressed from the ROOT player's point of view. In
     # negamax the sign flips on every ply, so a flat -contempt makes draws look
     # good to us at odd plies - exactly backwards.
-    draw_score = (np.int32(-ctl[C_CONTEMPT]) if (ply & 1) == 0
-                  else np.int32(ctl[C_CONTEMPT]))
+    draw_score = (np.int32(-c.ctl[C_CONTEMPT]) if (ply & 1) == 0
+                  else np.int32(c.ctl[C_CONTEMPT]))
     if ply > 0:
         # The referee stops here and the game is drawn, whatever is on the
         # board.
-        if ctl[C_GAMEPLY] + ply >= PLY_CAP:
+        if c.ctl[C_GAMEPLY] + ply >= PLY_CAP:
             return draw_score
         if s[17] >= uint64(100):
             return draw_score
-        if is_repetition(rep, ridx, int64(s[17])):
+        if is_repetition(c.rep, ridx, int64(s[17])):
             return draw_score
         # mate distance pruning: a shorter mate is already available
         if alpha < int32(-MATE + ply):
@@ -955,18 +1034,19 @@ def negamax(
         depth += 1                      # check extension
 
     if depth <= 0:
-        return quiesce(stack, mbs, buf, sbuf, ply, alpha, beta, ctl, tbuf, acc)
+        return quiesce(c, ply, alpha, beta)
 
     # ---- transposition table ----
     # A singular-extension probe searches this same position with one move
     # excluded; the table must then neither answer for it nor learn from it.
-    excluded = killers[ply, 3]
+    excluded = c.killers[ply, 3]
     idx = key & uint64(TT_MASK)
-    tt_hit = tt_key[idx] == key and excluded == uint32(0)
-    tt_mv = tt_move[idx] if tt_hit else uint32(0)
-    if tt_hit and not is_pv and int64(tt_depth[idx]) >= depth:
-        v = from_tt(int32(tt_score[idx]), ply)
-        b = tt_bound[idx]
+    tt_hit = c.tt[idx, 0] == key and excluded == uint32(0)
+    tt_data = c.tt[idx, 1] if tt_hit else uint64(0)
+    tt_mv = tt_mv_of(tt_data) if tt_hit else uint32(0)
+    if tt_hit and not is_pv and tt_depth_of(tt_data) >= depth:
+        v = from_tt(tt_score_of(tt_data), ply)
+        b = tt_bound_of(tt_data)
         if b == uint8(BOUND_EXACT):
             return v
         if b == uint8(BOUND_LOWER) and v >= beta:
@@ -979,9 +1059,9 @@ def negamax(
     if depth >= IIR_MIN_DEPTH and tt_mv == uint32(0) and not in_check:
         depth -= 1
 
-    static = eval_adjusted(s, mbs[ply], acc[ply], ctl[C_GAMEPLY] + ply)
-    evals[ply] = static
-    improving = (not in_check) and ply >= 2 and static > evals[ply - 2]
+    static = eval_adjusted(s, c.mbs[ply], c.acc[ply], c.ctl[C_GAMEPLY] + ply)
+    c.evals[ply] = static
+    improving = (not in_check) and ply >= 2 and static > c.evals[ply - 2]
 
     if not is_pv and not in_check and excluded == uint32(0):
         # reverse futility: so far above beta that the opponent cannot claw back
@@ -994,14 +1074,12 @@ def negamax(
             d = depth - 1 - r
             if d < 0:
                 d = 0
-            make_null(stack[ply], mbs[ply], stack[ply + 1], mbs[ply + 1])
-            killers[ply, 2] = uint32(0)          # no move to counter
+            make_null(c.stack[ply], c.mbs[ply], c.stack[ply + 1], c.mbs[ply + 1])
+            c.killers[ply, 2] = uint32(0)          # no move to c.counter
             if USE_NNUE:
-                acc_copy(acc[ply], acc[ply + 1])
-            sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, ply + 1, d,
-                          -beta, -beta + int32(1), False, ctl, tbuf, acc)
-            if ctl[C_STOPPED] == 1:
+                acc_copy(c.acc[ply], c.acc[ply + 1])
+            sc = -negamax(c, ply + 1, d, -beta, -beta + int32(1), False)
+            if c.ctl[C_STOPPED] == 1:
                 return int32(0)
             if sc >= beta:
                 return beta if sc >= int32(MATE_IN_MAX) else sc
@@ -1012,27 +1090,26 @@ def negamax(
     # deeper, so the line the whole search rests on is seen further.
     extension = 0
     if (depth >= SE_MIN_DEPTH and excluded == uint32(0) and tt_hit and tt_mv != uint32(0)
-            and tt_bound[idx] != uint8(BOUND_UPPER) and int64(tt_depth[idx]) >= depth - 3):
-        tt_v = from_tt(int32(tt_score[idx]), ply)
+            and tt_bound_of(tt_data) != uint8(BOUND_UPPER) and tt_depth_of(tt_data) >= depth - 3):
+        tt_v = from_tt(tt_score_of(tt_data), ply)
         if abs(tt_v) < int32(MATE_IN_MAX):
             sbeta = tt_v - int32(SE_MARGIN) * int32(depth)
-            killers[ply, 3] = tt_mv
-            sv = negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                         tt_bound, killers, history, counter, rep, evals, ply, (depth - 1) // 2,
-                         sbeta - int32(1), sbeta, False, ctl, tbuf, acc)
-            killers[ply, 3] = uint32(0)
-            if ctl[C_STOPPED] == 1:
+            c.killers[ply, 3] = tt_mv
+            sv = negamax(c, ply, (depth - 1) // 2, sbeta - int32(1), sbeta, False)
+            c.killers[ply, 3] = uint32(0)
+            if c.ctl[C_STOPPED] == 1:
                 return int32(0)
             if sv < sbeta:
                 extension = 1
 
     counter_mv = uint32(0)
     if ply > 0:
-        prev = killers[ply - 1, 2]
+        prev = c.killers[ply - 1, 2]
         if prev != uint32(0):
-            counter_mv = counter[us, prev & uint32(63), (prev >> uint32(6)) & uint32(63)]
-    n = gen_moves(s, mbs[ply], buf[ply])
-    score_moves(s, mbs[ply], buf[ply], sbuf[ply], n, tt_mv, killers, history, ply, counter_mv)
+            counter_mv = c.counter[us, prev & uint32(63), (prev >> uint32(6)) & uint32(63)]
+    n = gen_moves(s, c.mbs[ply], c.buf[ply])
+    score_moves(s, c.mbs[ply], c.buf[ply], c.sbuf[ply], n, tt_mv, c.killers, c.history, ply,
+                counter_mv)
 
     old_alpha = alpha
     best = int32(-INF)
@@ -1042,14 +1119,17 @@ def negamax(
     quiet_list = np.empty(64, dtype=np.uint32)
 
     for i in range(n):
-        pick_best(buf[ply], sbuf[ply], i, n)
-        mv = buf[ply][i]
+        if i < 4:
+            pick_best(c.buf[ply], c.sbuf[ply], i, n)
+        elif i == 4:
+            sort_desc(c.buf[ply], c.sbuf[ply], i, n)
+        mv = c.buf[ply][i]
         if mv == excluded:
             continue
         to = (mv >> uint32(6)) & uint32(63)
-        is_quiet = (mbs[ply][to] == 12 and ((mv >> uint32(12)) & uint32(7)) == uint32(0)
+        is_quiet = (c.mbs[ply][to] == 12 and ((mv >> uint32(12)) & uint32(7)) == uint32(0)
                     and ((mv >> uint32(15)) & uint32(7)) != uint32(1))
-        bad_capture = sbuf[ply][i] < int32(-500_000)
+        bad_capture = c.sbuf[ply][i] < int32(-500_000)
 
         if not is_pv and not in_check and best > int32(-MATE_IN_MAX):
             # late move pruning: enough quiet moves tried, and none of them helped
@@ -1063,15 +1143,15 @@ def negamax(
                 continue
             # a capture that loses more than the depth could win back
             if (bad_capture and depth <= SEE_PRUNE_DEPTH
-                    and not see_ge(s, mbs[ply], mv, int32(-SEE_PRUNE_MARGIN * depth))):
+                    and not see_ge(s, c.mbs[ply], mv, int32(-SEE_PRUNE_MARGIN * depth))):
                 continue
 
-        if not make(s, mbs[ply], stack[ply + 1], mbs[ply + 1], mv):
+        if not make(s, c.mbs[ply], c.stack[ply + 1], c.mbs[ply + 1], mv):
             continue
         new_depth = depth - 1 + (extension if mv == tt_mv else 0)
-        killers[ply, 2] = mv                     # what the child is replying to
+        c.killers[ply, 2] = mv                     # what the child is replying to
         if USE_NNUE:
-            acc_update(acc[ply], acc[ply + 1], mbs[ply], mbs[ply + 1], us, mv)
+            acc_update(c.acc[ply], c.acc[ply + 1], c.mbs[ply], c.mbs[ply + 1], us, mv)
         legal += 1
         if is_quiet and quiets < 64:
             quiet_list[quiets] = mv
@@ -1080,29 +1160,22 @@ def negamax(
         # ---- late move reductions ----
         r = 0
         if depth >= 3 and legal > 2 and (is_quiet or bad_capture):
-            hist = history[us, mv & uint32(63), to] if is_quiet else int32(0)
+            hist = c.history[us, mv & uint32(63), to] if is_quiet else int32(0)
             r = lmr_reduction(depth, legal, is_pv, improving,
-                              mv == killers[ply, 0] or mv == killers[ply, 1] or mv == counter_mv,
+                              (mv == c.killers[ply, 0] or mv == c.killers[ply, 1]
+                               or mv == counter_mv),
                               bad_capture, hist)
 
         # ---- principal variation search ----
         if legal == 1:
-            sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth,
-                          -beta, -alpha, is_pv, ctl, tbuf, acc)
+            sc = -negamax(c, ply + 1, new_depth, -beta, -alpha, is_pv)
         else:
-            sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth - r,
-                          -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
+            sc = -negamax(c, ply + 1, new_depth - r, -alpha - int32(1), -alpha, False)
             if sc > alpha and r > 0:          # reduced search beat alpha: verify
-                sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth,
-                              -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
+                sc = -negamax(c, ply + 1, new_depth, -alpha - int32(1), -alpha, False)
             if is_pv and sc > alpha and sc < beta:
-                sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, counter, rep, evals, ply + 1, new_depth,
-                              -beta, -alpha, True, ctl, tbuf, acc)
-        if ctl[C_STOPPED] == 1:
+                sc = -negamax(c, ply + 1, new_depth, -beta, -alpha, True)
+        if c.ctl[C_STOPPED] == 1:
             return int32(0)
 
         if sc > best:
@@ -1112,7 +1185,7 @@ def negamax(
             alpha = sc
         if alpha >= beta:
             if is_quiet:
-                on_cutoff(killers, history, counter, quiet_list, ply, int64(us), mv, depth,
+                on_cutoff(c.killers, c.history, c.counter, quiet_list, ply, int64(us), mv, depth,
                           quiets)
             break
 
@@ -1126,78 +1199,45 @@ def negamax(
     bound = (uint8(BOUND_LOWER) if best >= beta
              else uint8(BOUND_EXACT) if best > old_alpha
              else uint8(BOUND_UPPER))
-    tt_store(tt_key, tt_move, tt_score, tt_depth, tt_bound, idx, key, best, ply, depth,
-             bound, best_move)
+    tt_store(c.tt, idx, key, best, ply, depth, bound, best_move)
     return best
 
 
-@njit(int64(uint64[:, :], int8[:, :], uint32[:, :], int32[:, :],
-            uint64[:], uint32[:], int16[:], int8[:], uint8[:],
-            uint32[:, :], int32[:, :, :], uint32[:, :, :], uint64[:], int32[:],
-            int64, int32, int32, int64[:], int64[::1], uint32[:], int32[:],
-            float32[:, :, ::1]), cache=False, nogil=True)
-def search_root(
-        stack: npt.NDArray[np.uint64],
-        mbs: npt.NDArray[np.int8],
-        buf: npt.NDArray[np.uint32],
-        sbuf: npt.NDArray[np.int32],
-        tt_key: npt.NDArray[np.uint64],
-        tt_move: npt.NDArray[np.uint32],
-        tt_score: npt.NDArray[np.int16],
-        tt_depth: npt.NDArray[np.int8],
-        tt_bound: npt.NDArray[np.uint8],
-        killers: npt.NDArray[np.uint32],
-        history: npt.NDArray[np.int32],
-        counter: npt.NDArray[np.uint32],
-        rep: npt.NDArray[np.uint64],
-        evals: npt.NDArray[np.int32],
-        depth: int,
-        alpha: np.int32,
-        beta: np.int32,
-        ctl: npt.NDArray[np.int64],
-        tbuf: npt.NDArray[np.int64],
-        out_moves: npt.NDArray[np.uint32],
-        out_scores: npt.NDArray[np.int32],
-        acc: npt.NDArray[np.float32],
-) -> int:
+@njit(int64(_CTX, int64, int32, int32), cache=False, nogil=True)
+def search_root(c: SearchState, depth: int, alpha: np.int32, beta: np.int32) -> int:
     """One iteration at `depth`. Scores every root move so the driver can reject
     one for a reason the search cannot see, and returns how many it scored."""
-    s = stack[0]
+    c.ctl = c.ctl
+    s = c.stack[0]
     key = s[18]
-    rep[ctl[C_REPBASE]] = key
+    c.rep[c.ctl[C_REPBASE]] = key
     idx = key & uint64(TT_MASK)
-    tt_mv = tt_move[idx] if tt_key[idx] == key else uint32(0)
+    tt_mv = tt_mv_of(c.tt[idx, 1]) if c.tt[idx, 0] == key else uint32(0)
 
-    n = gen_moves(s, mbs[0], buf[0])
-    score_moves(s, mbs[0], buf[0], sbuf[0], n, tt_mv, killers, history, 0, uint32(0))
+    n = gen_moves(s, c.mbs[0], c.buf[0])
+    score_moves(s, c.mbs[0], c.buf[0], c.sbuf[0], n, tt_mv, c.killers, c.history, 0, uint32(0))
 
     best = int32(-INF)
     best_move = uint32(0)
     count = 0
     for i in range(n):
-        pick_best(buf[0], sbuf[0], i, n)
-        mv = buf[0][i]
-        if not make(s, mbs[0], stack[1], mbs[1], mv):
+        pick_best(c.buf[0], c.sbuf[0], i, n)
+        mv = c.buf[0][i]
+        if not make(s, c.mbs[0], c.stack[1], c.mbs[1], mv):
             continue
-        killers[0, 2] = mv
+        c.killers[0, 2] = mv
         if USE_NNUE:
-            acc_update(acc[0], acc[1], mbs[0], mbs[1], s[14], mv)
+            acc_update(c.acc[0], c.acc[1], c.mbs[0], c.mbs[1], s[14], mv)
         if count == 0:
-            sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, 1, depth - 1,
-                          -beta, -alpha, True, ctl, tbuf, acc)
+            sc = -negamax(c, 1, depth - 1, -beta, -alpha, True)
         else:
-            sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                          tt_bound, killers, history, counter, rep, evals, 1, depth - 1,
-                          -alpha - int32(1), -alpha, False, ctl, tbuf, acc)
+            sc = -negamax(c, 1, depth - 1, -alpha - int32(1), -alpha, False)
             if sc > alpha:
-                sc = -negamax(stack, mbs, buf, sbuf, tt_key, tt_move, tt_score, tt_depth,
-                              tt_bound, killers, history, counter, rep, evals, 1, depth - 1,
-                              -beta, -alpha, True, ctl, tbuf, acc)
-        if ctl[C_STOPPED] == 1:
+                sc = -negamax(c, 1, depth - 1, -beta, -alpha, True)
+        if c.ctl[C_STOPPED] == 1:
             return -count if count > 0 else 0
-        out_moves[count] = mv
-        out_scores[count] = sc
+        c.out_moves[count] = mv
+        c.out_scores[count] = sc
         count += 1
         if sc > best:
             best = sc
@@ -1206,11 +1246,8 @@ def search_root(
             alpha = sc
 
     if count > 0:
-        tt_key[idx] = key
-        tt_move[idx] = best_move
-        tt_score[idx] = int16(to_tt(best, 0))
-        tt_depth[idx] = int8(depth)
-        tt_bound[idx] = uint8(BOUND_EXACT)
+        c.tt[idx, 0] = key
+        c.tt[idx, 1] = tt_pack(best_move, to_tt(best, 0), depth, uint8(BOUND_EXACT))
     return count
 
 

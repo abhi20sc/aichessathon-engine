@@ -25,6 +25,7 @@ from .search import (
     C_NODES,
     C_REPBASE,
     C_STOPPED,
+    SearchState,
     age_history,
     search_root,
 )
@@ -46,6 +47,11 @@ MOVES_LEFT_START = 70
 
 #: Share of the increment spent on top of the clock share each move.
 INCREMENT_SHARE = 0.6
+
+#: A search whose score has fallen this far below the previous move's may
+#: run to this multiple of its budget (the hard ceiling still applies).
+TROUBLE_DROP_CP = 40
+TROUBLE_SHARE = 1.8
 
 
 def allocate(time_left_ms: float, increment_ms: float, overhead_ms: float,
@@ -108,11 +114,8 @@ class Engine:
         self.scratch = np.zeros((2, 19), dtype=np.uint64)
         self.scratch_mb = np.full((2, 64), 12, dtype=np.int8)
 
-        self.tt_key = np.zeros(TT_SIZE, dtype=np.uint64)
-        self.tt_move = np.zeros(TT_SIZE, dtype=np.uint32)
-        self.tt_score = np.zeros(TT_SIZE, dtype=np.int16)
-        self.tt_depth = np.zeros(TT_SIZE, dtype=np.int8)
-        self.tt_bound = np.zeros(TT_SIZE, dtype=np.uint8)
+        # (key, packed data) per slot: one cache line per probe
+        self.tt = np.zeros((TT_SIZE, 2), dtype=np.uint64)
 
         # two killers per ply, the move made at that ply (what the child replies to),
         # and the move a singular-extension probe is excluding
@@ -129,7 +132,14 @@ class Engine:
         self.out_moves = np.zeros(MAX_ROOT_MOVES, dtype=np.uint32)
         self.out_scores = np.zeros(MAX_ROOT_MOVES, dtype=np.int32)
 
+        self.ctx = SearchState(self.stack, self.mbs, self.buf, self.sbuf, self.tt,  # type: ignore[no-untyped-call]
+                               self.killers, self.history, self.counter, self.rep,
+                               self.evals, self.ctl, self.tbuf, self.acc,
+                               self.out_moves, self.out_scores)
         self.overhead_ms = DEFAULT_OVERHEAD_MS
+        #: Best score of the previous search, from the mover's view: a search
+        #: whose score falls well below it is in trouble and gets more time.
+        self.prev_score = 0
         self.nps = 1_500_000.0
         self.depth_reached = 0
         self.nodes_last = 0
@@ -141,13 +151,11 @@ class Engine:
         """Compile every kernel and take a first speed reading."""
         self.think("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
                    budget_ms=250.0, hard_ms=400.0, history=())
-        self.tt_key[:] = 0
-        self.tt_move[:] = 0
-        self.tt_depth[:] = 0
-        self.tt_bound[:] = 0
+        self.tt[:] = 0
         self.history[:] = 0
         self.killers[:] = 0
         self.counter[:] = 0
+        self.prev_score = 0
 
     def abort(self) -> None:
         """Raise the kernel's stop flag from another thread. The search polls
@@ -198,6 +206,7 @@ class Engine:
         prev_best = ""
         stable = 0
         score = 0
+        trouble = False
 
         for depth in range(1, max_depth + 1):
             if stop is not None and stop.is_set():
@@ -210,12 +219,7 @@ class Engine:
 
             fails = 0
             while True:
-                count = search_root(
-                    self.stack, self.mbs, self.buf, self.sbuf,
-                    self.tt_key, self.tt_move, self.tt_score, self.tt_depth, self.tt_bound,
-                    self.killers, self.history, self.counter, self.rep, self.evals,
-                    depth, alpha, beta, self.ctl, self.tbuf,
-                    self.out_moves, self.out_scores, self.acc)
+                count = search_root(self.ctx, depth, alpha, beta)
                 if count <= 0 or self.ctl[C_STOPPED] == 1:
                     break
                 top = max(int(self.out_scores[i]) for i in range(count))
@@ -273,12 +277,23 @@ class Engine:
             if stop is not None:               # pondering: only the clock above ends it
                 continue
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            # a search that keeps changing its mind deserves more time
-            soft = budget_ms * (1.20 - 0.04 * min(stable, 10))
+            # A search that keeps changing its mind deserves more time, and
+            # so does one whose score has just fallen: the move it is about
+            # to play may be the one that loses (round 51 played a two-move
+            # fork into a knight at depth 15 on 1.2 s with 54 s in hand; two
+            # plies more saw it). A settled best move earns only a small
+            # discount, since a quiet move can hide a tactic as easily as a
+            # sharp one.
+            if score < self.prev_score - TROUBLE_DROP_CP:
+                trouble = True
+            soft = budget_ms * (TROUBLE_SHARE if trouble
+                                else 1.20 - 0.02 * min(stable, 10))
             if elapsed_ms > soft:
                 break
 
         spent = time.perf_counter() - started
+        if stop is None:                       # a real search, not a ponder
+            self.prev_score = score
         self.last_search_ms = spent * 1000.0
         self.nodes_last = int(self.ctl[C_NODES])
         if spent > 0.02 and self.nodes_last > 20_000:
