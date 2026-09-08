@@ -45,6 +45,21 @@ except Exception as exc:
     _engine_error = f"{type(exc).__name__}: {exc}"
 _init_seconds = time.perf_counter() - _started
 
+# Opening book: our own engine's choices at thirty seconds a move from the
+# rated start positions (tools/build_book.py), keyed by the first four FEN
+# fields. A hit is played at once and the clock is kept for later.
+_BOOK: dict[str, str] = {}
+try:
+    import json
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "book.json")) as _fh:
+        _BOOK = json.load(_fh)
+except Exception:
+    _BOOK = {}
+
+
+def _book_key(fen: str) -> str:
+    return " ".join(fen.split()[:4])
+
 # The numba compile is the one thing we cannot measure on the competition
 # hardware from here, and an overrun past 60 s forfeits every game. This line is
 # discarded in rated games and shown in the validation log, so the first upload
@@ -242,7 +257,11 @@ def get_move(fen: str, time_left_ms: int) -> str:
         return only
 
     chosen: str | None = None
-    if _engine is not None:
+    hit = _BOOK.get(_book_key(fen))
+    if hit in legal:
+        _tracker.sync(fen)
+        chosen = hit
+    if chosen is None and _engine is not None:
         try:
             tracked = _tracker.sync(fen)
             history = GameTracker.history_fens(tracked)

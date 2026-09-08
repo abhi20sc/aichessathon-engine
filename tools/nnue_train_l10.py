@@ -85,12 +85,17 @@ def load(paths: list[Path], limit: int | None, residual: bool, mirror: bool = Fa
                     total += 1
     if limit:
         total = min(total, limit)
-    W2 = np.full((total, MAXP), PAD, dtype=np.int32)
-    B2 = np.full((total, MAXP), PAD, dtype=np.int32)
-    S2 = np.zeros(total, dtype=np.int64)
-    T2 = np.zeros(total, dtype=np.float32)
-    E2 = np.zeros(total, dtype=np.float32)
-    K2 = np.zeros(total, dtype=np.int64)
+    # With --mirror the arrays are allocated at their final size up front:
+    # the mirrored copies of the training rows come first, the originals
+    # after them, so the last 5% (the holdout) stays unmirrored. Building
+    # the originals and concatenating a flipped copy needed twice the memory.
+    cut = total - total // 20 if mirror else 0
+    W2 = np.full((cut + total, MAXP), PAD, dtype=np.int16)
+    B2 = np.full((cut + total, MAXP), PAD, dtype=np.int16)
+    S2 = np.zeros(cut + total, dtype=np.int64)
+    T2 = np.zeros(cut + total, dtype=np.float32)
+    E2 = np.zeros(cut + total, dtype=np.float32)
+    K2 = np.zeros(cut + total, dtype=np.int64)
     i = 0
     for p in paths:
         with p.open() as fh:
@@ -102,35 +107,40 @@ def load(paths: list[Path], limit: int | None, residual: bool, mirror: bool = Fa
                     break
                 fen, result, cp = parts[0], float(parts[1]), float(parts[2])
                 w, b, stm = featurise(fen)
-                W2[i] = w
-                B2[i] = b
-                S2[i] = stm
-                K2[i] = bucket_of(int((w < PAD).sum()))
+                j = cut + i
+                W2[j] = w
+                B2[j] = b
+                S2[j] = stm
+                K2[j] = bucket_of(int((w < PAD).sum()))
                 p_cp = 1.0 / (1.0 + math.exp(-cp * SCALE))
                 t = LAMBDA * p_cp + (1.0 - LAMBDA) * result
-                T2[i] = t if stm == 0 else 1.0 - t
+                T2[j] = t if stm == 0 else 1.0 - t
                 if residual:
                     set_fen(st[0], mbs[0], fen)
-                    E2[i] = float(evaluate_w(st[0], mbs[0], WEIGHTS))
+                    E2[j] = float(evaluate_w(st[0], mbs[0], WEIGHTS))
                 i += 1
         if i >= total:
             break
-    W2, B2, S2, T2, E2, K2 = W2[:i], B2[:i], S2[:i], T2[:i], E2[:i], K2[:i]
-    n_hold = len(T2) // 20
+    if i < total:                      # fewer rows than counted: shrink in place
+        keep = np.r_[np.arange(0, cut), np.arange(cut, cut + i)]
+        W2, B2, S2, T2, E2, K2 = W2[keep], B2[keep], S2[keep], T2[keep], E2[keep], K2[keep]
+        total = i
     if mirror:
-        # Mirror every position left-right: same label, same side to move,
-        # every square sq -> sq ^ 7 (castling rights aside, chess is symmetric).
-        # Doubles the data for free; hold-out rows are not mirrored.
-        n = len(T2)
-        cut = n - n // 20
-        def flip(a: np.ndarray) -> np.ndarray:
-            f = a[:cut].copy()
+        # Mirror every training position left-right: same label, same side
+        # to move, every square sq -> sq ^ 7 (castling rights aside, chess
+        # is symmetric). Doubles the data for free.
+        src = slice(cut, cut + cut)
+        for arr in (W2, B2):
+            f = arr[src].copy()
             real = f < PAD
             f[real] = (f[real] & ~7) | (7 - (f[real] & 7))
-            return f
-        W2 = np.concatenate([flip(W2), W2]); B2 = np.concatenate([flip(B2), B2])
-        S2 = np.concatenate([S2[:cut], S2]); T2 = np.concatenate([T2[:cut], T2])
-        E2 = np.concatenate([E2[:cut], E2]); K2 = np.concatenate([K2[:cut], K2])
+            arr[:cut] = f
+            del f
+        S2[:cut] = S2[src]
+        T2[:cut] = T2[src]
+        E2[:cut] = E2[src]
+        K2[:cut] = K2[src]
+    n_hold = total // 20
     return (W2, B2, S2, T2, E2, K2, n_hold)
 
 
