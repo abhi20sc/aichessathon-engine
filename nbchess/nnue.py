@@ -178,12 +178,9 @@ def acc_update(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32],
                mb: npt.NDArray[np.int8], mb_child: npt.NDArray[np.int8],
                us: np.uint64, mv: np.uint32) -> int:
     """Child accumulators after `mv`, from the parent's and the PARENT's
-    mailbox (the board before the move). Mirrors core.make piece by piece.
-    A king move that changes its side's feature block or mirror rebuilds
-    that side from the CHILD's mailbox instead."""
-    for i in range(ACC_W):
-        child[0, i] = parent[0, i]
-        child[1, i] = parent[1, i]
+    mailbox (the board before the move). Mirrors core.make piece by piece,
+    in one fused pass per perspective. A king move that changes its side's
+    feature block or mirror rebuilds that side from the CHILD's mailbox."""
     frm = int64(mv & uint32(63))
     to = int64((mv >> uint32(6)) & uint32(63))
     promo = int64((mv >> uint32(12)) & uint32(7))
@@ -193,24 +190,28 @@ def acc_update(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32],
     rebuilt = -1
     if pc % 6 == 5:
         v = _view(side, to)
-        if float32(v // 8) != child[side, HIDDEN] or float32(v % 8) != child[side, HIDDEN + 1]:
+        if float32(v // 8) != parent[side, HIDDEN] or float32(v % 8) != parent[side, HIDDEN + 1]:
             _refresh_side(mb_child, child, side)
             rebuilt = side
+    # the captured piece and square, if any
+    csq = int64(-1)
+    cap = int64(12)
+    if flag == 1:                                       # en passant
+        csq = to - 8 if side == 0 else to + 8
+        cap = int64(mb[csq])
+    elif mb[to] != 12:
+        csq = to
+        cap = int64(mb[to])
+    newpc = side * 6 + promo if promo != 0 else pc
     for p in range(2):
         if p == rebuilt:
             continue
-        if flag == 1:                                   # en passant
-            csq = to - 8 if side == 0 else to + 8
-            _acc_piece(child, int64(mb[csq]), csq, -1, p)
-        else:
-            cap = int64(mb[to])
-            if cap != 12:
-                _acc_piece(child, cap, to, -1, p)
-        _acc_piece(child, pc, frm, -1, p)
-        if promo != 0:
-            _acc_piece(child, side * 6 + promo, to, 1, p)
-        else:
-            _acc_piece(child, pc, to, 1, p)
+        base = int64(parent[p, HIDDEN])
+        m = int64(parent[p, HIDDEN + 1])
+        child[p, HIDDEN] = parent[p, HIDDEN]
+        child[p, HIDDEN + 1] = parent[p, HIDDEN + 1]
+        i_frm = _feat(p, pc, frm, base, m)
+        i_to = _feat(p, newpc, to, base, m)
         if flag == 2:                                   # castling: the rook hops too
             if to == 6:
                 rf, rt = 7, 5
@@ -221,8 +222,18 @@ def acc_update(parent: npt.NDArray[np.float32], child: npt.NDArray[np.float32],
             else:
                 rf, rt = 56, 59
             rpc = int64(mb[rf])
-            _acc_piece(child, rpc, rf, -1, p)
-            _acc_piece(child, rpc, rt, 1, p)
+            i_rf = _feat(p, rpc, rf, base, m)
+            i_rt = _feat(p, rpc, rt, base, m)
+            for i in range(HIDDEN):
+                child[p, i] = ((((parent[p, i] - W1[i_frm, i]) + W1[i_to, i])
+                                - W1[i_rf, i]) + W1[i_rt, i])
+        elif cap != 12:
+            i_cap = _feat(p, cap, csq, base, m)
+            for i in range(HIDDEN):
+                child[p, i] = ((parent[p, i] - W1[i_cap, i]) - W1[i_frm, i]) + W1[i_to, i]
+        else:
+            for i in range(HIDDEN):
+                child[p, i] = (parent[p, i] - W1[i_frm, i]) + W1[i_to, i]
     return 0
 
 

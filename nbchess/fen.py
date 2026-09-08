@@ -2,7 +2,7 @@
 import numpy as np
 import numpy.typing as npt
 
-from .core import gen_moves, make, perft
+from .core import STATE_W, gen_moves, make, perft, pst_init
 from .zobrist import CASTLE_KEY, EP_KEY, PIECE_KEY, SIDE_KEY
 
 U = np.uint64
@@ -13,7 +13,7 @@ MAXPLY = 128
 
 def new_stack(maxply: int = MAXPLY) -> tuple[
         npt.NDArray[np.uint64], npt.NDArray[np.int8], npt.NDArray[np.uint32]]:
-    return (np.zeros((maxply, 19), dtype=U),
+    return (np.zeros((maxply, STATE_W), dtype=U),
             np.full((maxply, 64), EMPTY, dtype=np.int8),
             np.zeros((maxply, 256), dtype=np.uint32))
 
@@ -49,6 +49,7 @@ def set_fen(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8], fen: str) -> No
     s[16] = 64 if ep == "-" else (ord(ep[0]) - 97) + (int(ep[1]) - 1) * 8
     s[17] = int(parts[4]) if len(parts) > 4 else 0
     s[18] = zobrist(s, mb)
+    pst_init(s, mb)
 
 
 def zobrist(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> np.uint64:

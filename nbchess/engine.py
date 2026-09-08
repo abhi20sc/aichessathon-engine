@@ -15,6 +15,7 @@ import numpy as np
 
 from .clock import available as clock_available
 from .clock import new_timebuf, now_ns
+from .core import STATE_W
 from .fen import new_stack, set_fen
 from .nnue import ACC_W, acc_refresh
 from .search import (
@@ -105,7 +106,7 @@ class Engine:
     def __init__(self) -> None:
         self.stack, self.mbs, self.buf = new_stack(MAX_PLY)
         self.sbuf = np.zeros((MAX_PLY, 256), dtype=np.int32)
-        self.scratch = np.zeros((2, 19), dtype=np.uint64)
+        self.scratch = np.zeros((2, STATE_W), dtype=np.uint64)
         self.scratch_mb = np.full((2, 64), 12, dtype=np.int8)
 
         # (key, packed data) per slot: one cache line per probe

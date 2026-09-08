@@ -23,6 +23,7 @@ import numpy.typing as npt
 from numba import njit
 from numba.core.types import boolean, int8, int64, uint32, uint64
 
+from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE
 from .tables import (
     BISHOP_MAGIC_A,
     BISHOP_MASK,
@@ -42,6 +43,39 @@ from .tables import (
     ROOK_TABLE,
 )
 from .zobrist import CASTLE_KEY, EP_KEY, PIECE_KEY, SIDE_KEY
+
+# Piece-square and phase deltas by 12-piece code, white positive, black
+# negative, so make() can keep the evaluation's material sums up to date.
+PST_MG12: npt.NDArray[np.int64] = np.zeros((12, 64), dtype=np.int64)
+PST_EG12: npt.NDArray[np.int64] = np.zeros((12, 64), dtype=np.int64)
+PHASE12: npt.NDArray[np.int64] = np.zeros(12, dtype=np.int64)
+for _pt in range(6):
+    PST_MG12[_pt] = MG_W[_pt]
+    PST_EG12[_pt] = EG_W[_pt]
+    PST_MG12[6 + _pt] = -MG_B[_pt].astype(np.int64)
+    PST_EG12[6 + _pt] = -EG_B[_pt].astype(np.int64)
+    PHASE12[_pt] = PHASE[_pt]
+    PHASE12[6 + _pt] = PHASE[_pt]
+STATE_W = 22
+S_MG, S_EG, S_PHASE = 19, 20, 21
+
+
+@njit(boolean(uint64[:], int8[:]), cache=False, nogil=True)
+def pst_init(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8]) -> bool:
+    """Fill the incremental sums from scratch (after a FEN is set)."""
+    mg = int64(0)
+    eg = int64(0)
+    ph = int64(0)
+    for sq in range(64):
+        pc = int64(mb[sq])
+        if pc != int64(12):
+            mg += PST_MG12[pc, sq]
+            eg += PST_EG12[pc, sq]
+            ph += PHASE12[pc]
+    s[S_MG] = uint64(mg)
+    s[S_EG] = uint64(eg)
+    s[S_PHASE] = uint64(ph)
+    return True
 
 U = np.uint64
 EMPTY = 12
@@ -262,6 +296,116 @@ def gen_moves(
     return n
 
 
+@njit(int64(uint64[:], int8[:], uint32[:]), cache=False, nogil=True)
+def gen_captures(
+        s: npt.NDArray[np.uint64],
+        mb: npt.NDArray[np.int8],
+        out: npt.NDArray[np.uint32],
+) -> int:
+    """Pseudo-legal captures and queen promotions only, for the quiescence
+    search: what gen_moves would emit with the quiet moves and the
+    underpromoting pushes left out."""
+    n = 0
+    us = s[14]
+    them = uint64(1) - us
+    off = us * uint64(6)
+    own = s[12 + us]
+    opp = s[12 + them]
+    occ = own | opp
+    empty = ~occ
+
+    # ---- pawns: queen promotions by push, then captures ----
+    pawns = s[off]
+    if us == uint64(0):
+        one = (pawns << uint64(8)) & empty & uint64(0xFF00000000000000)
+        rank8 = uint64(0xFF00000000000000)
+    else:
+        one = (pawns >> uint64(8)) & empty & uint64(0x00000000000000FF)
+        rank8 = uint64(0x00000000000000FF)
+    b = one
+    while b:
+        to = lsb(b)
+        b &= b - uint64(1)
+        frm = to - uint64(8) if us == uint64(0) else to + uint64(8)
+        out[n] = mk(frm, to, uint64(4), uint64(0))
+        n += 1
+    ep = s[16]
+    b = pawns
+    while b:
+        frm = lsb(b)
+        b &= b - uint64(1)
+        a = PAWN_ATT[us, frm] & opp
+        while a:
+            to = lsb(a)
+            a &= a - uint64(1)
+            if (uint64(1) << to) & rank8:
+                out[n] = mk(frm, to, uint64(4), uint64(0))
+                n += 1
+                out[n] = mk(frm, to, uint64(3), uint64(0))
+                n += 1
+                out[n] = mk(frm, to, uint64(2), uint64(0))
+                n += 1
+                out[n] = mk(frm, to, uint64(1), uint64(0))
+                n += 1
+            else:
+                out[n] = mk(frm, to, uint64(0), uint64(0))
+                n += 1
+        if ep != NONE_SQ and (PAWN_ATT[us, frm] & (uint64(1) << ep)):
+            out[n] = mk(frm, ep, uint64(0), uint64(1))
+            n += 1
+
+    # ---- pieces ----
+    b = s[off + uint64(1)]
+    while b:
+        frm = lsb(b)
+        b &= b - uint64(1)
+        a = KNIGHT_ATT[frm] & opp
+        while a:
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
+    b = s[off + uint64(2)]
+    while b:
+        frm = lsb(b)
+        b &= b - uint64(1)
+        a = bishop_att(frm, occ) & opp
+        while a:
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
+    b = s[off + uint64(3)]
+    while b:
+        frm = lsb(b)
+        b &= b - uint64(1)
+        a = rook_att(frm, occ) & opp
+        while a:
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
+    b = s[off + uint64(4)]
+    while b:
+        frm = lsb(b)
+        b &= b - uint64(1)
+        a = queen_att(frm, occ) & opp
+        while a:
+            to = lsb(a)
+            a &= a - uint64(1)
+            out[n] = mk(frm, to, uint64(0), uint64(0))
+            n += 1
+    ksq = lsb(s[off + uint64(5)])
+    a = KING_ATT[ksq] & opp
+    while a:
+        to = lsb(a)
+        a &= a - uint64(1)
+        out[n] = mk(ksq, to, uint64(0), uint64(0))
+        n += 1
+    return n
+
+
+
 @njit(boolean(uint64[:], int8[:], uint64[:], int8[:], uint32), cache=False, nogil=True)
 def make(
         s: npt.NDArray[np.uint64],
@@ -275,7 +419,7 @@ def make(
     Maintains the Zobrist hash incrementally in slot 18. Returns False if the
     move leaves our own king in check, i.e. the move was pseudo-legal only.
     """
-    for i in range(19):
+    for i in range(STATE_W):
         ns[i] = s[i]
     for i in range(64):
         nmb[i] = mb[i]
@@ -291,6 +435,9 @@ def make(
     fb = uint64(1) << frm
     tb = uint64(1) << to
     h = s[18] ^ SIDE_KEY
+    d_mg = int64(0)
+    d_eg = int64(0)
+    d_ph = int64(0)
 
     # retire the old en-passant file from the hash before setting a new one
     if s[16] != NONE_SQ:
@@ -306,6 +453,9 @@ def make(
         nmb[csq] = int8(EMPTY)
         h ^= PIECE_KEY[cap, csq]
         ns[17] = uint64(0)
+        d_mg -= PST_MG12[cap, csq]
+        d_eg -= PST_EG12[cap, csq]
+        d_ph -= PHASE12[cap]
     else:
         cap = uint64(nmb[to])
         if cap != uint64(EMPTY):
@@ -313,11 +463,16 @@ def make(
             ns[12 + them] &= ~tb
             h ^= PIECE_KEY[cap, to]
             ns[17] = uint64(0)
+            d_mg -= PST_MG12[cap, to]
+            d_eg -= PST_EG12[cap, to]
+            d_ph -= PHASE12[cap]
 
     ns[pc] &= ~fb
     ns[12 + us] &= ~fb
     nmb[frm] = int8(EMPTY)
     h ^= PIECE_KEY[pc, frm]
+    d_mg -= PST_MG12[pc, frm]
+    d_eg -= PST_EG12[pc, frm]
 
     if promo != uint64(0):
         newpc = us * uint64(6) + promo
@@ -325,10 +480,15 @@ def make(
         nmb[to] = int8(newpc)
         h ^= PIECE_KEY[newpc, to]
         ns[17] = uint64(0)
+        d_mg += PST_MG12[newpc, to]
+        d_eg += PST_EG12[newpc, to]
+        d_ph += PHASE12[newpc] - PHASE12[pc]
     else:
         ns[pc] |= tb
         nmb[to] = int8(pc)
         h ^= PIECE_KEY[pc, to]
+        d_mg += PST_MG12[pc, to]
+        d_eg += PST_EG12[pc, to]
     ns[12 + us] |= tb
 
     if pc == us * uint64(6):                    # a pawn moved
@@ -354,11 +514,16 @@ def make(
         nmb[rf] = int8(EMPTY)
         nmb[rt] = int8(rpc)
         h ^= PIECE_KEY[rpc, rf] ^ PIECE_KEY[rpc, rt]
+        d_mg += PST_MG12[rpc, rt] - PST_MG12[rpc, rf]
+        d_eg += PST_EG12[rpc, rt] - PST_EG12[rpc, rf]
 
     ns[15] = s[15] & uint64(CASTLE_MASK[frm]) & uint64(CASTLE_MASK[to])
     h ^= CASTLE_KEY[s[15]] ^ CASTLE_KEY[ns[15]]
     ns[14] = them
     ns[18] = h
+    ns[S_MG] = uint64(int64(s[S_MG]) + d_mg)
+    ns[S_EG] = uint64(int64(s[S_EG]) + d_eg)
+    ns[S_PHASE] = uint64(int64(s[S_PHASE]) + d_ph)
 
     ksq = lsb(ns[us * uint64(6) + uint64(5)])
     return not attacked(ns, ksq, them)
@@ -372,7 +537,7 @@ def make_null(
         nmb: npt.NDArray[np.int8],
 ) -> bool:
     """Pass the move to the opponent. Used by null-move pruning."""
-    for i in range(19):
+    for i in range(STATE_W):
         ns[i] = s[i]
     for i in range(64):
         nmb[i] = mb[i]

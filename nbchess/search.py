@@ -39,6 +39,7 @@ from .clock import now_ns
 from .core import (
     attacked,
     bishop_att,
+    gen_captures,
     gen_moves,
     lsb,
     make,
@@ -50,7 +51,7 @@ from .core import (
 from .evaltables import MATERIAL
 from .nnue import RESIDUAL as NN_RESIDUAL
 from .nnue import USE_NNUE, acc_copy, acc_update, bucket_of, nn_eval, nn_output
-from .pesto import EG_B, EG_W, MG_B, MG_W, PHASE, PHASE_MAX
+from .pesto import PHASE_MAX
 from .tables import KING_ATT, KNIGHT_ATT, PAWN_ATT
 from .terms import (
     ADJACENT_FILES,
@@ -222,62 +223,94 @@ def evaluate_raw(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     wp_att = ((wp & ~FILE_A) << uint64(7)) | ((wp & ~FILE_H) << uint64(9))
     bp_att = ((bp & ~FILE_A) >> uint64(9)) | ((bp & ~FILE_H) >> uint64(7))
 
-    # ---- material and piece-square ----
-    for pt in range(6):
-        b = s[pt]
-        while b:
-            sq = lsb(b)
-            b &= b - uint64(1)
-            mg += MG_W[pt, sq]
-            eg += EG_W[pt, sq]
-            phase += PHASE[pt]
-        b = s[uint64(6) + uint64(pt)]
-        while b:
-            sq = lsb(b)
-            b &= b - uint64(1)
-            mg -= MG_B[pt, sq]
-            eg -= EG_B[pt, sq]
-            phase += PHASE[pt]
+    # ---- material and piece-square: kept up to date by make() ----
+    mg = int32(int64(s[19]))
+    eg = int32(int64(s[20]))
+    phase = int32(int64(s[21]))
     for pt in range(5):
         diff = int32(popcount(s[pt])) - int32(popcount(s[uint64(6) + uint64(pt)]))
         mg += diff * w[I_MAT_MG + pt]
         eg += diff * w[I_MAT_EG + pt]
 
     # ---- mobility, counted on squares not attacked by an enemy pawn ----
+    # The same attack sets feed the king-safety count against the enemy
+    # king, so both are gathered in one pass.
+    ks_units_w = int32(0)      # attack units against WHITE's king (by black)
+    ks_att_w = int32(0)
+    ks_units_b = int32(0)
+    ks_att_b = int32(0)
     for side in range(2):
         off = uint64(side) * uint64(6)
         own = s[12 + uint64(side)]
         bad = bp_att if side == 0 else wp_att
         sign = int32(1) if side == 0 else int32(-1)
+        ek = lsb(s[(uint64(1) - uint64(side)) * uint64(6) + uint64(5)])
+        ezone = KING_ZONE[1 - side, ek]
+        units = int32(0)
+        attackers = int32(0)
 
+        hits = int32(0)
         b = s[off + uint64(1)]
         while b:
             sq = lsb(b)
             b &= b - uint64(1)
-            c = popcount(KNIGHT_ATT[sq] & ~own & ~bad)
+            a = KNIGHT_ATT[sq]
+            c = popcount(a & ~own & ~bad)
             mg += sign * w[I_KN_MG + c]
             eg += sign * w[I_KN_EG + c]
+            n = popcount(a & ezone)
+            if n > uint64(0):
+                hits += int32(n)
+                attackers += int32(1)
+        units += KS_WEIGHT[1] * hits
+        hits = int32(0)
         b = s[off + uint64(2)]
         while b:
             sq = lsb(b)
             b &= b - uint64(1)
-            c = popcount(bishop_att(sq, occ) & ~own & ~bad)
+            a = bishop_att(sq, occ)
+            c = popcount(a & ~own & ~bad)
             mg += sign * w[I_BI_MG + c]
             eg += sign * w[I_BI_EG + c]
+            n = popcount(a & ezone)
+            if n > uint64(0):
+                hits += int32(n)
+                attackers += int32(1)
+        units += KS_WEIGHT[2] * hits
+        hits = int32(0)
         b = s[off + uint64(3)]
         while b:
             sq = lsb(b)
             b &= b - uint64(1)
-            c = popcount(rook_att(sq, occ) & ~own & ~bad)
+            a = rook_att(sq, occ)
+            c = popcount(a & ~own & ~bad)
             mg += sign * w[I_RK_MG + c]
             eg += sign * w[I_RK_EG + c]
+            n = popcount(a & ezone)
+            if n > uint64(0):
+                hits += int32(n)
+                attackers += int32(1)
+        units += KS_WEIGHT[3] * hits
+        hits = int32(0)
         b = s[off + uint64(4)]
         while b:
             sq = lsb(b)
             b &= b - uint64(1)
-            c = popcount(queen_att(sq, occ) & ~own & ~bad)
+            a = queen_att(sq, occ)
+            c = popcount(a & ~own & ~bad)
             mg += sign * w[I_QU_MG + c]
             eg += sign * w[I_QU_EG + c]
+            n = popcount(a & ezone)
+            if n > uint64(0):
+                hits += int32(n)
+                attackers += int32(1)
+        units += KS_WEIGHT[4] * hits
+        if side == 0:
+            ks_units_b = units          # white's pieces attack black's king
+            ks_att_b = attackers
+        else:
+            ks_units_w = units
+            ks_att_w = attackers
 
         # ---- bishop pair ----
         if popcount(s[off + uint64(2)]) >= uint64(2):
@@ -343,11 +376,8 @@ def evaluate_raw(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
     # ---- king safety, middlegame only ----
     for side in range(2):
         ksq = lsb(s[uint64(side) * uint64(6) + uint64(5)])
-        zone = KING_ZONE[side, ksq]
         them = uint64(1) - uint64(side)
         off = them * uint64(6)
-        units = int32(0)
-        attackers = int32(0)
 
         # pawn shelter and storm on the king's file and its neighbours
         own_p = s[uint64(side) * uint64(6)]
@@ -375,25 +405,12 @@ def evaluate_raw(s: npt.NDArray[np.uint64], mb: npt.NDArray[np.int8],
                     break
             shelter += w[I_SHELTER + d_own] + w[I_STORM + d_their]
         mg += shelter if side == 0 else -shelter
-        for pt in range(1, 5):
-            b = s[off + uint64(pt)]
-            hits = int32(0)
-            while b:
-                sq = lsb(b)
-                b &= b - uint64(1)
-                if pt == 1:
-                    a = KNIGHT_ATT[sq]
-                elif pt == 2:
-                    a = bishop_att(sq, occ)
-                elif pt == 3:
-                    a = rook_att(sq, occ)
-                else:
-                    a = queen_att(sq, occ)
-                n = popcount(a & zone)
-                if n > uint64(0):
-                    hits += int32(n)
-                    attackers += int32(1)
-            units += KS_WEIGHT[pt] * hits
+        if side == 0:
+            units = ks_units_w
+            attackers = ks_att_w
+        else:
+            units = ks_units_b
+            attackers = ks_att_b
         if attackers >= int32(2):
             idx = (units * KS_ATTACKERS[min(attackers, int32(8))]) // int32(100)
             if idx > int32(99):
@@ -832,7 +849,10 @@ def quiesce(c: SearchState, ply: int, alpha: np.int32, beta: np.int32) -> np.int
         if stand > alpha:
             alpha = stand
 
-    n = gen_moves(s, c.mbs[ply], c.buf[ply])
+    if in_check:
+        n = gen_moves(s, c.mbs[ply], c.buf[ply])
+    else:
+        n = gen_captures(s, c.mbs[ply], c.buf[ply])
     # captures and promotions only, ordered by MVV-LVA; every move in check
     for i in range(n):
         mv = c.buf[ply][i]
