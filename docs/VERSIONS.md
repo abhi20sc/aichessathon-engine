@@ -35,7 +35,15 @@ Rated ladder with v2: L (round 8, Black).
 | Aspiration window opens fully after three failures or on a mate score (round 8 burnt 4.5 s of a 5.9 s clock on one move re-searching) | clock safety |
 | Hard time ceiling: half of the remaining clock less one second, 50 ms floor | clock safety; replay of round 8's ending never below 1.4 s |
 
-## v21 — 8 Sep evening (candidate)
+## v22 — 9 Sep morning (tag `v22`)
+
+| change | measured |
+|---|---|
+| Network retrained on 6.95M positions (mac_all11: the 5.3M set plus the 7 Sep Mac deltas), same 256-wide recipe; hold194 0.007308 (was 0.007441) | on the v21 engine: +24, +16, +7, +20, +23, +31 (+/- 40 each, 1800 games pooled **+20, +4..+36**); +21, +28 (+/- 56) at 200 ms; miss test 44/76 vs 50/76 |
+
+The same net measured -22 +/- 40 on the v19 engine on 7 Sep (300 games) and was rejected then; that sample sits inside the pooled interval.
+
+## v21 — 8 Sep evening (tag `v21`)
 
 Speed only; the search is unchanged. Profiled by calling each kernel twice
 per node and measuring the extra time: hand evaluation 283 ns, accumulator
@@ -55,6 +63,9 @@ Total about +25% nodes per second. Tried and dropped: LLVM ctpop/cttz
 intrinsics (LLVM already emitted POPCNT; no change), pawn-king term cache
 (+1%, not worth a state field), forceinline on the magic lookups (nothing),
 a smaller TT (nothing: memory latency is not the bottleneck).
+
+Evening 8 Sep, measured with the new compressed-clock A/B (`tools.ab --clock --clock-scale 6`: 120+0.5 played as 20+0.083 with every allocator constant scaled, 300 games each vs v21): MOVES_LEFT_START 45 -30 +/- 40, 50 -7 +/- 39. The 60/30 spread stays; the clock is closed as a topic.
+Correction history (pawn-structure eval correction fed back from search results): -2 +/- 39 @60 ms, 49.5% over 200 games @200 ms. Cut-node LMR +1: +7 +/- 39. 6.95M-row net on the v21 engine: +24, +16, +7, +20 (+/- 40 each, 1200 games pooled +17, -3..+37); at 200 ms +21, +28 (+/- 56); miss test 44/76 vs v21's 50/76. Middlegame-weighted net (16-28-piece rows counted twice; hold194 0.007612): -13, +17 (+/- 40) - level, dropped.
 
 ## v16-v20 — 7-8 Sep
 

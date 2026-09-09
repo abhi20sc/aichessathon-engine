@@ -86,7 +86,7 @@ def openings(count: int, seed: int = 17) -> list[str]:
 
 
 def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
-               ply_cap: int = 600) -> float:
+               ply_cap: int = 600, overhead: float = 200.0) -> float:
     """One game under a real clock, each side running its own allocator.
 
     A fixed per-move budget cannot test a time-management change: the whole
@@ -107,9 +107,9 @@ def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
 
         side = board.turn
         try:                                     # newer allocators take the ply
-            soft, hard = alloc[side](clock[side], inc, 200.0, len(board.move_stack))
+            soft, hard = alloc[side](clock[side], inc, overhead, len(board.move_stack))
         except TypeError:
-            soft, hard = alloc[side](clock[side], inc, 200.0)
+            soft, hard = alloc[side](clock[side], inc, overhead)
         t = time.perf_counter()
         ranked = engines[side].think(board.fen(), budget_ms=soft, hard_ms=hard,
                                      game_ply=len(board.move_stack))
@@ -124,6 +124,17 @@ def play_clock(white, black, wa, ba, fen: str, base: float, inc: float,
         if move not in board.legal_moves:
             return 0.0 if side == chess.WHITE else 1.0
         board.push(move)
+
+
+def scaled(alloc, k: float):
+    """An allocator that sees the clock as if it were `k` times longer and
+    hands back budgets `k` times shorter, so a compressed game exercises the
+    same code and constants as a full-length one."""
+    def f(time_left_ms: float, increment_ms: float, overhead_ms: float,
+          game_ply: int = 0) -> tuple[float, float]:
+        soft, hard = alloc(time_left_ms * k, increment_ms * k, overhead_ms * k, game_ply)
+        return soft / k, hard / k
+    return f
 
 
 class Ponder:
@@ -221,6 +232,11 @@ def main() -> None:
                     help="play with real clocks and each side's own allocator")
     ap.add_argument("--base-ms", type=float, default=120_000.0)
     ap.add_argument("--inc-ms", type=float, default=500.0)
+    ap.add_argument("--clock-scale", type=float, default=1.0,
+                    help="compress the clock by this factor: the game is played at "
+                         "base/scale + inc/scale, and each allocator is asked in real "
+                         "units and its answer divided, so every constant in it applies "
+                         "as it would in a real game")
     ap.add_argument("--ponder-a", action="store_true",
                     help="let A think on B's time (run on two cores)")
     ap.add_argument("--seed", type=int, default=17,
@@ -235,6 +251,10 @@ def main() -> None:
     ea = mod_a.Engine()
     eb = mod_b.Engine()
     aa, ab_ = mod_a.allocate, mod_b.allocate
+    if args.clock_scale != 1.0:
+        aa, ab_ = scaled(aa, args.clock_scale), scaled(ab_, args.clock_scale)
+        args.base_ms /= args.clock_scale
+        args.inc_ms /= args.clock_scale
     print(f"both engines compiled in {time.perf_counter() - t:.0f}s", flush=True)
 
     fens = (book_openings(args.book, (args.games + 1) // 2, seed=args.seed) if args.book
@@ -247,7 +267,8 @@ def main() -> None:
         w, bl = (ea, eb) if a_is_white else (eb, ea)
         wa, ba = (aa, ab_) if a_is_white else (ab_, aa)
         if args.clock:
-            s = play_clock(w, bl, wa, ba, fen, args.base_ms, args.inc_ms)
+            s = play_clock(w, bl, wa, ba, fen, args.base_ms, args.inc_ms,
+                           overhead=200.0 / args.clock_scale)
         else:
             a_ms = args.ms_a if args.ms_a is not None else args.ms
             mw, mb = (a_ms, args.ms) if a_is_white else (args.ms, a_ms)
@@ -270,7 +291,11 @@ def main() -> None:
     n = args.games
     sc = (wins + draws / 2) / n
     d, m = elo(sc, n)
-    print(f"\nA vs B over {n} games at {args.ms:.0f}ms/move")
+    if args.clock:
+        print(f"\nA vs B over {n} games at {args.base_ms:.0f}+{args.inc_ms:.0f} ms"
+              f" (clock scale {args.clock_scale:g})")
+    else:
+        print(f"\nA vs B over {n} games at {args.ms:.0f}ms/move")
     print(f"+{wins} ={draws} -{losses}   score {sc:.1%}")
     print(f"Elo difference: {d:+.0f} +/- {m:.0f}  (95%)")
 
