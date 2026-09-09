@@ -182,6 +182,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--mirror", action="store_true",
                     help="add the left-right mirror of every training position")
+    ap.add_argument("--cosine", action="store_true",
+                    help="cosine learning-rate decay to zero over the run instead of "
+                         "halving every third of it")
     args = ap.parse_args()
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
@@ -200,7 +203,11 @@ def main() -> None:
 
     net = Net(args.hidden)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)
-    sched = torch.optim.lr_scheduler.StepLR(opt, step_size=max(1, args.epochs // 3), gamma=0.5)
+    if args.cosine:
+        sched: torch.optim.lr_scheduler.LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=args.epochs)
+    else:
+        sched = torch.optim.lr_scheduler.StepLR(opt, step_size=max(1, args.epochs // 3), gamma=0.5)
 
     def loss_on(ix: np.ndarray) -> float:
         with torch.no_grad():

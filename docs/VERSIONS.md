@@ -35,6 +35,15 @@ Rated ladder with v2: L (round 8, Black).
 | Aspiration window opens fully after three failures or on a mate score (round 8 burnt 4.5 s of a 5.9 s clock on one move re-searching) | clock safety |
 | Hard time ceiling: half of the remaining clock less one second, 50 ms floor | clock safety; replay of round 8's ending never below 1.4 s |
 
+## v23 — 9 Sep afternoon (tag `v23`)
+
+| change | measured |
+|---|---|
+| Contempt 60 (was 30): a draw counts as -60 cp, so the engine plays on in level positions instead of repeating | vs the weaker v19 build from identical openings: contempt 60 **+78 +/- 41** (61.3%), contempt 30 +38 +/- 40 (55.3%) |
+| Network: 6.95M rows with 803k middlegame rows relabelled by Stockfish at 40k nodes (was 15k), cosine LR schedule; hold194 0.007266 (v22 net 0.007308) | vs v22: +19, +13, -1, +12 (+/- 40 each; 1200 games pooled +10, -10..+30). Components alone: cosine +13/+6, relabel (345k rows) +7/-8 |
+
+Ladder context: v22 scored = = L = = = = L L on 9 Sep against teams around our level (26th-27th); the losses (R77, R82, R83) were positional slides from the opening, all as Black in closed structures. Contempt is a deliberate variance choice for the last ladder day.
+
 ## v22 — 9 Sep morning (tag `v22`)
 
 | change | measured |
@@ -42,6 +51,8 @@ Rated ladder with v2: L (round 8, Black).
 | Network retrained on 6.95M positions (mac_all11: the 5.3M set plus the 7 Sep Mac deltas), same 256-wide recipe; hold194 0.007308 (was 0.007441) | on the v21 engine: +24, +16, +7, +20, +23, +31 (+/- 40 each, 1800 games pooled **+20, +4..+36**); +21, +28 (+/- 56) at 200 ms; miss test 44/76 vs 50/76 |
 
 The same net measured -22 +/- 40 on the v19 engine on 7 Sep (300 games) and was rejected then; that sample sits inside the pooled interval.
+
+Relabel experiment (9 Sep morning): 345k middlegame rows (6.5% of mac_all10) relabelled by Stockfish at 40k nodes instead of 15k (median shift 12 cp, mean 22, 7% of rows moved >= 50 cp); same net recipe: hold194 0.007442, +7 +/- 39 vs v21, -8 +/- 39 vs v22. Inconclusive at that coverage; the relabelling continues towards ~1M rows.
 
 ## v21 — 8 Sep evening (tag `v21`)
 

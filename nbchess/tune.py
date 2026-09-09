@@ -22,7 +22,7 @@ BOUND_NONE, BOUND_LOWER, BOUND_UPPER, BOUND_EXACT = 0, 1, 2, 3
 #: Draws are scored slightly against us so that a winning engine does not accept
 #: a repetition. Small on purpose - the 1990s cautionary cases are engines that
 #: refused a saving repetition and lost outright. Decayed when not winning.
-CONTEMPT = 30
+CONTEMPT = 60
 
 RFP_MARGIN = 75                   # per ply of depth, reverse futility  (tune)
 RFP_MAX_DEPTH = 8
