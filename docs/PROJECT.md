@@ -4,7 +4,7 @@ A chess engine written for the AI Chessathon ladder (September 2026), where ever
 agent runs as plain Python on one CPU core with 120 s + 0.5 s per game, no native
 code, and a 90-second import budget. The whole engine — bitboard move generation,
 alpha-beta search and an NNUE-style evaluation — is Python compiled with numba at
-import time. Twenty-three builds were uploaded over eight days; every change was
+import time. Twenty-four builds were uploaded over eight days; every change was
 measured before it shipped, and the ones that failed are recorded alongside the
 ones that worked.
 
@@ -24,8 +24,8 @@ ones that worked.
   one fused pass per move (`nnue.py`).
 - **Clock** (`engine.py`): the remaining time is spread over `max(30, 60 − ply/2)`
   moves plus 60% of the increment, with a hard ceiling of half the clock.
-- **Opening book** (`book.json`): the engine's own 30-second answers for the 45
-  rated start positions and the most likely replies.
+- **Opening book** (`book.json`): 858 positions — every start and opening line
+  seen in our rated games — each answered by the engine after 30–40 s of thought.
 - **Contempt**: a draw is scored as −60 cp, so the engine plays on in level positions.
 
 Node speed is roughly 600–700k nodes/second on one core; a middlegame move
@@ -57,6 +57,7 @@ Highlights, all vs the previous build unless stated:
 | v21 | +25% node speed, bit-identical search (four hot-path rewrites) | +33 / +45 ± 40 |
 | v22 | 6.95M-position net | +20 (+4..+36), 1800 games |
 | v23 | contempt 60; net with 800k rows relabelled at deeper Stockfish search | +78 vs +38 against a weaker build; net +10 |
+| v24 | deep book: 858 positions from our own rated games, 40 s each | safe by construction |
 
 Things that did not help, each measured: continuation history, correction
 history, cut-node LMR, quiescence TT, king-bucketed inputs, a 512-wide net, a
