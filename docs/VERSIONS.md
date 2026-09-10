@@ -35,7 +35,13 @@ Rated ladder with v2: L (round 8, Black).
 | Aspiration window opens fully after three failures or on a mate score (round 8 burnt 4.5 s of a 5.9 s clock on one move re-searching) | clock safety |
 | Hard time ceiling: half of the remaining clock less one second, 50 ms floor | clock safety; replay of round 8's ending never below 1.4 s |
 
-## Night of 9-10 Sep: last experiments (no v24)
+## v24 — 10 Sep afternoon (tag `v24`)
+
+| change | measured |
+|---|---|
+| Deep opening book: 547 new positions — every position where we were to move in the first 16 plies of our 78 rated games and which the book did not cover — each thought for 40 s by the v23 engine (`tools/build_book2.py`, `tools/merge_book2.py`); 858 entries in all. Only 21 of the 68 start positions seen on the ladder were in `data/start_fens.txt`, so 53 of 78 games had begun outside the old book | safe by construction (own engine, every move checked legal); book hit rate on the first 10 plies of our games 390/395 |
+
+## Night of 9-10 Sep: last experiments
 
 | candidate | measured |
 |---|---|
