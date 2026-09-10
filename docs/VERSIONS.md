@@ -35,6 +35,17 @@ Rated ladder with v2: L (round 8, Black).
 | Aspiration window opens fully after three failures or on a mate score (round 8 burnt 4.5 s of a 5.9 s clock on one move re-searching) | clock safety |
 | Hard time ceiling: half of the remaining clock less one second, 50 ms floor | clock safety; replay of round 8's ending never below 1.4 s |
 
+## Night of 9-10 Sep: last experiments (no v24)
+
+| candidate | measured |
+|---|---|
+| v23 net at 200 ms vs v22 | +19, +2 (+/- 56) — the +10 holds at depth |
+| Network with 1.55M rows relabelled at 40k nodes (55% of the middlegame rows), cosine; hold194 0.007244 (best) | vs v23: -14, +14 (+/- 40) — level |
+| Contempt 90 vs the weaker build | +61 (contempt 60: +78, 30: +38) — 60 kept |
+| "Small edge, no conversion" positions from R87-R89 replayed at 2.5 s and 10 s | only 1 of 5 errors fixed by more time; the rest are evaluation-limited |
+
+v23 is the final ladder build.
+
 ## v23 — 9 Sep afternoon (tag `v23`)
 
 | change | measured |
