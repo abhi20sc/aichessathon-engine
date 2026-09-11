@@ -1,10 +1,11 @@
 # Abhi's Chess Demon — a pure-Python chess engine for the AI Chessathon ladder
 
-**Team:** Dark Sister — Abhijith Pradeep (Imperial College London) · **Event:** AI Chessathon,
-3–11 September 2026 · **Builds:** 24 (21 uploaded and validated)
+**Team:** Dark Sister — Abhijith Pradeep (Imperial College London) · **Builds:** 24
+(21 uploaded and validated) · **Event:** AI Chessathon — online qualification
+4–11 September 2026, London final 12 September 2026, sponsored by Optiver
 
-**Qualifier ladder: #47 of 465 — top 10%**, rating 2319 (peak 2372), 35W 37D 31L ·
-**Final qualification Swiss: #28 of 334**, 9.0/13 (7W 4D 2L)
+**Qualifier ladder: finished #47 of 465 — top 10%**, rating 2319 (peak 2372), 35W 37D 31L
+**Final qualification Swiss: finished #28 of 334**, 9.0/13 — 7W 4D 2L
 
 This repository is the complete record of one competition entry: the engine, the
 training pipeline, the test tooling, and — in `docs/VERSIONS.md` — every build with
@@ -86,7 +87,7 @@ in a day, and the changes were measured, found harmful, and reverted (v19).
 | date | what happened |
 |---|---|
 | 29 Aug – 2 Sep | Starter harness; bitboard engine; tapered evaluation; calibration against a rated reference. |
-| 3 Sep | **v1** uploaded: PVS + hand eval, ~2400 implied vs a limited Stockfish. Ladder W W D L W L W. |
+| 3–4 Sep | **v1** uploaded: PVS + hand eval, ~2400 implied vs a limited Stockfish. Ladder W W D L W L W. |
 | 4 Sep | **v2** SEE (+75), futility; **v3** pondering (+109, later banned by a rules change), aspiration and clock safety. Self-play labelling pipeline written; laptop starts producing Stockfish-labelled positions. |
 | 5 Sep | **v4** first residual NNUE (+40 over 600 games); **v5–v9**: bigger nets, clean holdout, moves-to-go clock, output damping, singular extensions, partial-iteration policy. |
 | 6 Sep | **v10** 2.9M-position net with output buckets (+50); **v11–v14** clock 60/30, output gain 0.85 (+37), 600-ply rule, mirror augmentation (+24). **8th on the ladder.** |
@@ -94,25 +95,27 @@ in a day, and the changes were measured, found harmful, and reverted (v19).
 | 8 Sep | **v20** opening book; **v21** +25% node speed with bit-identical search (+33/+45); recovery to ~26th. Correction history, cut-node LMR, a 512-wide net, clock variants all measured and rejected. |
 | 9 Sep | **v22** 6.95M-position net (+20 over 1800 games); **v23** contempt 60 (+78 vs +38 against a weaker build), net with deeper Stockfish labels. Field around 20th–40th had strengthened faster; losses were quiet positional slides from the opening. |
 | 10 Sep | Deeper relabelling measured level; profiling found the remaining speed too spread out to win; **v24** deep book from our own games after discovering only 21 of the 68 ladder start positions were in the list we had tested from. |
-| 11 Sep | Ladder closed after round 109 at **47th of 465**; the 13-round final qualification Swiss played out on v24 for **28th of 334**, 9.0/13. |
+| 11 Sep | Ladder closed after round 109 at **47th of 465**; builds locked and the 13-round final qualification Swiss played out on v24 for **28th of 334**, 9.0/13. |
 
-## 5. Result
+## 5. The qualifier ladder — #47 of 465
 
-Two stages, scored separately by the platform.
+We entered the online qualification: a rated ladder of hourly rounds from 4 to
+11 September, 465 teams, 109 rounds. Each team's latest validated upload plays;
+the rating after the last round is the standing.
 
-**Qualifier ladder** (Rated 1–109, 3–11 Sep): **#47 of 465 teams, top 10%** — rating
-**2319**, peak **2372** after round 76, **35W 37D 31L** over 103 decided games
-(109 pairings, 6 voided).
-
-**Final qualification Swiss** (Final 110–122, 11 Sep, 13 rounds): **#28 of 334 teams** —
-**9.0/13**, **7W 4D 2L**, Buchholz 106.0, stage rating **2516**. Played entirely on v24.
-Combined over both stages: 42W 41D 33L in 116 decided games.
+**Final position: #47 of 465 — top 10%.** Rating **2319** after round 109, peak
+**2372** after round 76, record **35W 37D 31L** over 103 decided games (109
+pairings, 6 voided).
 
 ![rank and rating through the ladder](docs/ladder_rank.png)
 
-Where the entry stood at the end of each day, reconstructed by scraping all 465 teams'
-rating curves off the site and re-sorting the table after every round (the method
-reproduces the published final table exactly; `docs/ladder_rank.csv`):
+Where the entry stood at the end of each day. The site publishes only the live
+table, so these were reconstructed: every team's page embeds its own per-round
+rating series as an SVG path against a calibrated axis, so scraping all 465 and
+re-sorting after each round rebuilds the table as it stood at any point. The
+method reproduces the published final table exactly — #47, 2319 — and each team's
+last point matches its published rating to within 3 points. Full series in
+`docs/ladder_rank.csv`.
 
 | after round | day | rank | teams rated | rating |
 |---|---|---|---|---|
@@ -123,22 +126,37 @@ reproduces the published final table exactly; `docs/ladder_rank.csv`):
 | 75 | 8 Sep | **17** | 402 | 2361 |
 | 90 | 9 Sep | **39** | 427 | 2252 |
 | 105 | 10 Sep | **54** | 448 | 2222 |
-| 109 | 11 Sep | **47** | 465 | 2319 |
+| **109** | **11 Sep** | **47** | **465** | **2319** |
 
-The best rank of the event was **7th after round 43**. The worst, once the field had
-settled, was **66th after round 63** — the floor of the slide caused by three clock
-changes shipped on game evidence rather than a measured match; v19 reverted them and
-the rank was back to 17th by the end of that day. The drift to ~54th over 9–10 Sep was
-not our rating falling (it held between 2200 and 2372) but the field growing from 400
-to 465 teams and improving faster than we did.
+Best rank of the event: **7th, after round 43**. Worst once the field had settled:
+**66th, after round 63** — the floor of the slide caused by three clock changes
+shipped on game evidence rather than a measured match, which v19 reverted; the rank
+was back to 17th by the end of that day. The drift to ~54th over 9–10 September was
+not the rating falling — it held between 2200 and 2372 — but the field growing from
+400 to 465 teams and improving faster than we did.
 
-The last build (v24, the deep book) was active from round 103 and scored **4W 1D 2L**
-in the closing ladder stretch (2225 → 2319) and **7W 4D 2L** in the final Swiss. Three
-of those ladder wins were as Black in the closed structures that had been the worst
-weakness two days earlier. Twenty games is far too few to call that a measured gain —
-it is reported as what happened, not as evidence the book was worth +90 rating.
+## 6. The final qualification Swiss — #28 of 334
 
-## 6. Every build and its measurement
+On the afternoon of 11 September the ladder closed and every team's build was
+locked for a **13-round Swiss** (rounds 110–122 on the site), played by the 334
+teams that entered. This is the stage that seeds the in-person London final on
+12 September: the room holds 50 seats, allocated one per UK university student in
+seed order down the Swiss standings.
+
+**Final position: #28 of 334.** Score **9.0/13** — **7W 4D 2L**, Buchholz 106.0,
+stage rating **2516**, our best rating of the event. Played entirely on v24.
+
+We did not play the London final on 12 September. Across both stages the engine
+finished 42W 41D 33L in 116 decided games.
+
+v24, the deep book, was the active build from round 103 on. It went **4W 1D 2L**
+over the closing ladder rounds (2225 → 2319) and **7W 4D 2L** through the Swiss.
+Three of the ladder wins were as Black in the closed structures that had been the
+worst weakness two days earlier. Twenty games is far too few to call that a
+measured gain — it is reported as what happened, not as evidence the book was worth
++90 rating.
+
+## 7. Every build and its measurement
 
 Elo vs the previous build, 60 ms/move, ±40 for 300 games unless stated.
 Full detail, including rejected variants, in `docs/VERSIONS.md`.
@@ -180,7 +198,7 @@ relabelled labels at 6.5% and 23% coverage, clock spreads 45 and 50, contempt
 magics, int16 accumulators, a smaller TT, opposite-bishop and passer rules,
 hand-set shelter terms, pruning exemptions for checks.
 
-## 7. Training (`tools/`, `training/`)
+## 8. Training (`tools/`, `training/`)
 
 Positions came from Stockfish self-play pipelines run on a laptop
 (`tools/pipeline.py` and successors: random-ply openings, the rated starts,
@@ -192,7 +210,7 @@ holdout file for comparable loss numbers; `tools/nnue_ensemble.py` writes the
 weights in a self-describing safetensors layout. About 7M positions in the
 final set; holdout loss went from 0.00929 (v12) to 0.00724 (best net).
 
-## 8. What the games said
+## 9. What the games said
 
 Reviewed with Stockfish at 300k nodes after every round. Wins were clean
 conversions; draws were dead-equal endings (0.00 from move ~45 against equal
@@ -204,7 +222,7 @@ ran 40–50 s of the 90 s budget, with one 68.5 s outlier. Our review error
 rates reached top-3 level in the endgame by day 3; the gap to the top ten
 stayed in the opening and middlegame evaluation.
 
-## 9. Running it
+## 10. Running it
 
 ```
 make setup                                   # uv sync

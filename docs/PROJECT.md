@@ -6,9 +6,10 @@ code, and a 90-second import budget. The whole engine — bitboard move generati
 alpha-beta search and an NNUE-style evaluation — is Python compiled with numba at
 import time. Twenty-four builds over nine days, twenty-one of them
 uploaded and validated; every change was measured before it shipped, and the ones
-that failed are recorded alongside the ones that worked. Final standing: **47th of
-465 teams (top 10%)** on the qualifier ladder — rating 2319, peak 2372, 35W 37D 31L —
-and **28th of 334** in the 13-round final qualification Swiss on 9.0/13 (7W 4D 2L).
+that failed are recorded alongside the ones that worked. We entered the online
+qualification and finished **47th of 465** on the rated ladder — rating 2319, peak
+2372, 35W 37D 31L — then **28th of 334** in the 13-round final qualification Swiss
+that seeds the London final, on 9.0/13 (7W 4D 2L). We did not play the London final.
 
 ## The engine (`nbchess/`)
 
