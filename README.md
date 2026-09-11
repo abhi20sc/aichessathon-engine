@@ -1,7 +1,8 @@
 # Abhi's Chess Demon — a pure-Python chess engine for the AI Chessathon ladder
 
 **Team:** Abhijith Pradeep (Imperial College London) · **Event:** AI Chessathon rated ladder,
-3–10 September 2026 · **Builds shipped:** 24 · **Peak rank:** 8th (6 Sep) · **Final stretch:** mid-table
+3–11 September 2026 · **Builds:** 24 (21 uploaded and validated) · **Final rank: #47 of 465 — top 10%**
+· **Rating:** 2319 (peak 2372) · **Record:** 41W 39D 33L
 
 This repository is the complete record of one competition entry: the engine, the
 training pipeline, the test tooling, and — in `docs/VERSIONS.md` — every build with
@@ -91,8 +92,21 @@ in a day, and the changes were measured, found harmful, and reverted (v19).
 | 8 Sep | **v20** opening book; **v21** +25% node speed with bit-identical search (+33/+45); recovery to ~26th. Correction history, cut-node LMR, a 512-wide net, clock variants all measured and rejected. |
 | 9 Sep | **v22** 6.95M-position net (+20 over 1800 games); **v23** contempt 60 (+78 vs +38 against a weaker build), net with deeper Stockfish labels. Field around 20th–40th had strengthened faster; losses were quiet positional slides from the opening. |
 | 10 Sep | Deeper relabelling measured level; profiling found the remaining speed too spread out to win; **v24** deep book from our own games after discovering only 21 of the 68 ladder start positions were in the list we had tested from. |
+| 11 Sep | Final qualification Swiss played out on v24; submissions and rosters locked at 11:00. |
 
-## 5. Every build and its measurement
+## 5. Result
+
+Final standing: **#47 of 465 teams, top 10%**, rating **2319** (peak 2372), **41W 39D 33L**
+across 109 rated rounds plus the final qualification Swiss. Rank peaked at 8th on 6 September,
+when the field was smaller and weaker; rating peaked at 2372 on 9 September.
+
+The last build (v24, the deep book) was active for the closing stretch and scored
+**4W 1D 2L** in its last seven games, with the rating going 2225 → 2319. Three of those
+wins were as Black in the closed structures that had been the worst weakness two days
+earlier. Seven games is far too few to call that a measured gain — it is reported here as
+what happened, not as evidence the book was worth +90 rating.
+
+## 6. Every build and its measurement
 
 Elo vs the previous build, 60 ms/move, ±40 for 300 games unless stated.
 Full detail, including rejected variants, in `docs/VERSIONS.md`.
@@ -122,7 +136,7 @@ Full detail, including rejected variants, in `docs/VERSIONS.md`.
 | 21 | +25% nps, bit-identical search (incremental PST, king-safety merge, fused accumulator, captures-only qsearch generator) | **+33 / +45** |
 | 22 | 6.95M-position net | **+20 (+4..+36)**, 1800 games; +21/+28 @200 ms |
 | 23 | contempt 60; net with 803k rows relabelled at 40k nodes, cosine schedule | contempt +78 vs +38 against a weaker build; net +10 (1200 games) |
-| 24 | deep book: 858 positions from our 78 rated games at 40 s each | safe by construction; 390/395 book hits on our games' first 10 plies |
+| 24 | deep book: 858 positions from our 78 rated games at 40 s each | safe by construction; 390/395 book hits on our games' first 10 plies; 4W 1D 2L over its last seven ladder games |
 
 **Measured and rejected** (numbers in `docs/VERSIONS.md`): continuation
 history, correction history, cut-node LMR, quiescence TT, LMP raised, LMR not
@@ -134,7 +148,7 @@ relabelled labels at 6.5% and 23% coverage, clock spreads 45 and 50, contempt
 magics, int16 accumulators, a smaller TT, opposite-bishop and passer rules,
 hand-set shelter terms, pruning exemptions for checks.
 
-## 6. Training (`tools/`, `training/`)
+## 7. Training (`tools/`, `training/`)
 
 Positions came from Stockfish self-play pipelines run on a laptop
 (`tools/pipeline.py` and successors: random-ply openings, the rated starts,
@@ -146,7 +160,7 @@ holdout file for comparable loss numbers; `tools/nnue_ensemble.py` writes the
 weights in a self-describing safetensors layout. About 7M positions in the
 final set; holdout loss went from 0.00929 (v12) to 0.00724 (best net).
 
-## 7. What the games said
+## 8. What the games said
 
 Reviewed with Stockfish at 300k nodes after every round. Wins were clean
 conversions; draws were dead-equal endings (0.00 from move ~45 against equal
@@ -158,7 +172,7 @@ ran 40–50 s of the 90 s budget, with one 68.5 s outlier. Our review error
 rates reached top-3 level in the endgame by day 3; the gap to the top ten
 stayed in the opening and middlegame evaluation.
 
-## 8. Running it
+## 9. Running it
 
 ```
 make setup                                   # uv sync

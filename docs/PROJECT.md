@@ -4,9 +4,10 @@ A chess engine written for the AI Chessathon ladder (September 2026), where ever
 agent runs as plain Python on one CPU core with 120 s + 0.5 s per game, no native
 code, and a 90-second import budget. The whole engine — bitboard move generation,
 alpha-beta search and an NNUE-style evaluation — is Python compiled with numba at
-import time. Twenty-four builds were uploaded over eight days; every change was
-measured before it shipped, and the ones that failed are recorded alongside the
-ones that worked.
+import time. Twenty-four builds over nine days, twenty-one of them
+uploaded and validated; every change was measured before it shipped, and the ones
+that failed are recorded alongside the ones that worked. Final standing: **47th of
+465 teams (top 10%)**, rating 2319, peak 2372, 41W 39D 33L.
 
 ## The engine (`nbchess/`)
 

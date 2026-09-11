@@ -35,6 +35,20 @@ Rated ladder with v2: L (round 8, Black).
 | Aspiration window opens fully after three failures or on a mate score (round 8 burnt 4.5 s of a 5.9 s clock on one move re-searching) | clock safety |
 | Hard time ceiling: half of the remaining clock less one second, 50 ms floor | clock safety; replay of round 8's ending never below 1.4 s |
 
+## Final standing — 11 Sep
+
+**#47 of 465 teams (top 10%)**, rating **2319**, peak 2372, record **41W 39D 33L** over
+109 rated rounds plus the final qualification Swiss. 21 of the 24 builds were uploaded
+and validated on the platform. Rank peaked at 8th on 6 Sep (smaller, weaker field);
+rating peaked at 2372 on 9 Sep; the low point was ~56th on 10 Sep.
+
+v24 was the active build for the closing stretch and went **4W 1D 2L** over its last
+seven games (Final 113-119: win vs SkyLab, loss vs Lubina, win vs OnlyBlunder, win vs
+forced enpassant, loss vs JBG fam, draw vs zenith, win vs The Pershore Gambit), rating
+2225 -> 2319. Three of the wins were as Black in closed structures, the weakness that
+cost R77/R82/R83 two days earlier. Seven games is well inside noise for a change of
+this size: recorded as what happened, not as a measured gain.
+
 ## v24 — 10 Sep afternoon (tag `v24`)
 
 | change | measured |
@@ -50,7 +64,7 @@ Rated ladder with v2: L (round 8, Black).
 | Contempt 90 vs the weaker build | +61 (contempt 60: +78, 30: +38) — 60 kept |
 | "Small edge, no conversion" positions from R87-R89 replayed at 2.5 s and 10 s | only 1 of 5 errors fixed by more time; the rest are evaluation-limited |
 
-v23 is the final ladder build.
+At the time these read level, v23 looked like the final build; v24 (the deep book) followed on 10 Sep.
 
 ## v23 — 9 Sep afternoon (tag `v23`)
 
