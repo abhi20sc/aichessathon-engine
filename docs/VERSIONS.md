@@ -50,7 +50,8 @@ were uploaded and validated on the platform.
 13 rounds over locked builds, the stage that seeds the London final (50 seats,
 one per UK university student in seed order). Score **9.0/13** — **7W 4D 2L**,
 Buchholz 106.0, stage rating **2516**, our best rating of the event. Played
-entirely on v24. We did not play the London final on 12 Sep.
+entirely on v24. We then withdrew from the London final — we could not attend the
+event on 12 Sep — so round 122 was the engine's last competitive game.
 
 Combined over both stages: **42W 41D 33L** in 116 decided games.
 

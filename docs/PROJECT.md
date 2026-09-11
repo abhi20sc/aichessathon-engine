@@ -9,7 +9,8 @@ uploaded and validated; every change was measured before it shipped, and the one
 that failed are recorded alongside the ones that worked. We entered the online
 qualification and finished **47th of 465** on the rated ladder — rating 2319, peak
 2372, 35W 37D 31L — then **28th of 334** in the 13-round final qualification Swiss
-that seeds the London final, on 9.0/13 (7W 4D 2L). We did not play the London final.
+that seeds the London final, on 9.0/13 (7W 4D 2L). We withdrew from the London
+final itself — we could not attend the event on 12 September.
 
 ## The engine (`nbchess/`)
 

@@ -6,6 +6,7 @@
 
 **Qualifier ladder: finished #47 of 465 — top 10%**, rating 2319 (peak 2372), 35W 37D 31L
 **Final qualification Swiss: finished #28 of 334**, 9.0/13 — 7W 4D 2L
+Withdrew from the London final — could not attend on the day.
 
 This repository is the complete record of one competition entry: the engine, the
 training pipeline, the test tooling, and — in `docs/VERSIONS.md` — every build with
@@ -95,7 +96,7 @@ in a day, and the changes were measured, found harmful, and reverted (v19).
 | 8 Sep | **v20** opening book; **v21** +25% node speed with bit-identical search (+33/+45); recovery to ~26th. Correction history, cut-node LMR, a 512-wide net, clock variants all measured and rejected. |
 | 9 Sep | **v22** 6.95M-position net (+20 over 1800 games); **v23** contempt 60 (+78 vs +38 against a weaker build), net with deeper Stockfish labels. Field around 20th–40th had strengthened faster; losses were quiet positional slides from the opening. |
 | 10 Sep | Deeper relabelling measured level; profiling found the remaining speed too spread out to win; **v24** deep book from our own games after discovering only 21 of the 68 ladder start positions were in the list we had tested from. |
-| 11 Sep | Ladder closed after round 109 at **47th of 465**; builds locked and the 13-round final qualification Swiss played out on v24 for **28th of 334**, 9.0/13. |
+| 11 Sep | Ladder closed after round 109 at **47th of 465**; builds locked and the 13-round final qualification Swiss played out on v24 for **28th of 334**, 9.0/13. Withdrew from the London final — could not attend on 12 Sep. |
 
 ## 5. The qualifier ladder — #47 of 465
 
@@ -146,8 +147,10 @@ seed order down the Swiss standings.
 **Final position: #28 of 334.** Score **9.0/13** — **7W 4D 2L**, Buchholz 106.0,
 stage rating **2516**, our best rating of the event. Played entirely on v24.
 
-We did not play the London final on 12 September. Across both stages the engine
-finished 42W 41D 33L in 116 decided games.
+That placing put us in range of a seat, but we withdrew from the London final — we
+could not attend the event on 12 September — so the engine's last competitive game
+was round 122 of the Swiss. Across both stages it finished 42W 41D 33L in 116
+decided games.
 
 v24, the deep book, was the active build from round 103 on. It went **4W 1D 2L**
 over the closing ladder rounds (2225 → 2319) and **7W 4D 2L** through the Swiss.
