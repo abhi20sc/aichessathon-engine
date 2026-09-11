@@ -7,7 +7,8 @@ alpha-beta search and an NNUE-style evaluation — is Python compiled with numba
 import time. Twenty-four builds over nine days, twenty-one of them
 uploaded and validated; every change was measured before it shipped, and the ones
 that failed are recorded alongside the ones that worked. Final standing: **47th of
-465 teams (top 10%)**, rating 2319, peak 2372, 41W 39D 33L.
+465 teams (top 10%)** on the qualifier ladder — rating 2319, peak 2372, 35W 37D 31L —
+and **28th of 334** in the 13-round final qualification Swiss on 9.0/13 (7W 4D 2L).
 
 ## The engine (`nbchess/`)
 

@@ -37,17 +37,52 @@ Rated ladder with v2: L (round 8, Black).
 
 ## Final standing — 11 Sep
 
-**#47 of 465 teams (top 10%)**, rating **2319**, peak 2372, record **41W 39D 33L** over
-109 rated rounds plus the final qualification Swiss. 21 of the 24 builds were uploaded
-and validated on the platform. Rank peaked at 8th on 6 Sep (smaller, weaker field);
-rating peaked at 2372 on 9 Sep; the low point was ~56th on 10 Sep.
+Two separate stages, two separate tables on the site.
 
-v24 was the active build for the closing stretch and went **4W 1D 2L** over its last
-seven games (Final 113-119: win vs SkyLab, loss vs Lubina, win vs OnlyBlunder, win vs
-forced enpassant, loss vs JBG fam, draw vs zenith, win vs The Pershore Gambit), rating
-2225 -> 2319. Three of the wins were as Black in closed structures, the weakness that
-cost R77/R82/R83 two days earlier. Seven games is well inside noise for a change of
-this size: recorded as what happened, not as a measured gain.
+**Qualifier ladder (Rated 1–109, 3–11 Sep): #47 of 465 teams — top 10%.**
+Rating **2319**, peak **2372** (after round 76), record **35W 37D 31L** over 103
+decided games (109 pairings; 6 voided). 21 of the 24 builds were uploaded and
+validated on the platform.
+
+**Final qualification Swiss (Final 110–122, 11 Sep, 13 rounds): #28 of 334 teams.**
+Score **9.0/13** — **7W 4D 2L**, Buchholz 106.0, stage rating **2516**. Played
+entirely on v24; we did not attend the London final, so this was the last thing
+the engine played.
+
+Combined over both stages: **42W 41D 33L** in 116 decided games.
+
+### Rank through the ladder, reconstructed
+
+Every team's `/team/<id>` page carries a rating graph whose SVG path is the exact
+per-round rating series, and the axis grid gives the calibration. Scraping all 465
+of them and sorting at each round recovers the ladder table as it stood after any
+round. The reconstruction reproduces the published final table exactly (rank 47,
+2319), and every team's last point matches its published rating to within 3 points.
+Full series in `docs/ladder_rank.csv`; chart in `docs/ladder_rank.png`.
+
+| after round | day | rank | teams rated | rating |
+|---|---|---|---|---|
+| 15 | 4 Sep | **15** | 237 | 1820 |
+| 30 | 5 Sep | **19** | 290 | 1911 |
+| 45 | 6 Sep | **10** | 329 | 2238 |
+| 60 | 7 Sep | **28** | 369 | 2132 |
+| 75 | 8 Sep | **17** | 402 | 2361 |
+| 90 | 9 Sep | **39** | 427 | 2252 |
+| 105 | 10 Sep | **54** | 448 | 2222 |
+| 109 | 11 Sep | **47** | 465 | 2319 |
+
+Best rank of the event: **7th, after round 43** (6 Sep, field of 325). Worst after
+the field had settled: **66th, after round 63** (8 Sep) — the bottom of the slide
+caused by the three unmeasured clock changes shipped on 7 Sep, which v19 reverted;
+rank was back to 17th by the end of 8 Sep. From there the drift down to ~54th over
+9–10 Sep was not a regression in our play — the rating held between 2200 and 2370
+— but the field arriving and improving faster than we did.
+
+v24 was the active build from round 103 on. Over the last seven ladder rounds it
+went **4W 1D 2L** (2225 → 2319), then **7W 4D 2L** across the 13-round final Swiss.
+Three of the ladder wins were as Black in the closed structures that had cost
+R77/R82/R83 two days earlier. Twenty games is still well inside noise for a change
+of this size: recorded as what happened, not as a measured gain.
 
 ## v24 — 10 Sep afternoon (tag `v24`)
 

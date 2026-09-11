@@ -1,8 +1,10 @@
 # Abhi's Chess Demon — a pure-Python chess engine for the AI Chessathon ladder
 
-**Team:** Abhijith Pradeep (Imperial College London) · **Event:** AI Chessathon rated ladder,
-3–11 September 2026 · **Builds:** 24 (21 uploaded and validated) · **Final rank: #47 of 465 — top 10%**
-· **Rating:** 2319 (peak 2372) · **Record:** 41W 39D 33L
+**Team:** Dark Sister — Abhijith Pradeep (Imperial College London) · **Event:** AI Chessathon,
+3–11 September 2026 · **Builds:** 24 (21 uploaded and validated)
+
+**Qualifier ladder: #47 of 465 — top 10%**, rating 2319 (peak 2372), 35W 37D 31L ·
+**Final qualification Swiss: #28 of 334**, 9.0/13 (7W 4D 2L)
 
 This repository is the complete record of one competition entry: the engine, the
 training pipeline, the test tooling, and — in `docs/VERSIONS.md` — every build with
@@ -92,19 +94,49 @@ in a day, and the changes were measured, found harmful, and reverted (v19).
 | 8 Sep | **v20** opening book; **v21** +25% node speed with bit-identical search (+33/+45); recovery to ~26th. Correction history, cut-node LMR, a 512-wide net, clock variants all measured and rejected. |
 | 9 Sep | **v22** 6.95M-position net (+20 over 1800 games); **v23** contempt 60 (+78 vs +38 against a weaker build), net with deeper Stockfish labels. Field around 20th–40th had strengthened faster; losses were quiet positional slides from the opening. |
 | 10 Sep | Deeper relabelling measured level; profiling found the remaining speed too spread out to win; **v24** deep book from our own games after discovering only 21 of the 68 ladder start positions were in the list we had tested from. |
-| 11 Sep | Final qualification Swiss played out on v24; submissions and rosters locked at 11:00. |
+| 11 Sep | Ladder closed after round 109 at **47th of 465**; the 13-round final qualification Swiss played out on v24 for **28th of 334**, 9.0/13. |
 
 ## 5. Result
 
-Final standing: **#47 of 465 teams, top 10%**, rating **2319** (peak 2372), **41W 39D 33L**
-across 109 rated rounds plus the final qualification Swiss. Rank peaked at 8th on 6 September,
-when the field was smaller and weaker; rating peaked at 2372 on 9 September.
+Two stages, scored separately by the platform.
 
-The last build (v24, the deep book) was active for the closing stretch and scored
-**4W 1D 2L** in its last seven games, with the rating going 2225 → 2319. Three of those
-wins were as Black in the closed structures that had been the worst weakness two days
-earlier. Seven games is far too few to call that a measured gain — it is reported here as
-what happened, not as evidence the book was worth +90 rating.
+**Qualifier ladder** (Rated 1–109, 3–11 Sep): **#47 of 465 teams, top 10%** — rating
+**2319**, peak **2372** after round 76, **35W 37D 31L** over 103 decided games
+(109 pairings, 6 voided).
+
+**Final qualification Swiss** (Final 110–122, 11 Sep, 13 rounds): **#28 of 334 teams** —
+**9.0/13**, **7W 4D 2L**, Buchholz 106.0, stage rating **2516**. Played entirely on v24.
+Combined over both stages: 42W 41D 33L in 116 decided games.
+
+![rank and rating through the ladder](docs/ladder_rank.png)
+
+Where the entry stood at the end of each day, reconstructed by scraping all 465 teams'
+rating curves off the site and re-sorting the table after every round (the method
+reproduces the published final table exactly; `docs/ladder_rank.csv`):
+
+| after round | day | rank | teams rated | rating |
+|---|---|---|---|---|
+| 15 | 4 Sep | **15** | 237 | 1820 |
+| 30 | 5 Sep | **19** | 290 | 1911 |
+| 45 | 6 Sep | **10** | 329 | 2238 |
+| 60 | 7 Sep | **28** | 369 | 2132 |
+| 75 | 8 Sep | **17** | 402 | 2361 |
+| 90 | 9 Sep | **39** | 427 | 2252 |
+| 105 | 10 Sep | **54** | 448 | 2222 |
+| 109 | 11 Sep | **47** | 465 | 2319 |
+
+The best rank of the event was **7th after round 43**. The worst, once the field had
+settled, was **66th after round 63** — the floor of the slide caused by three clock
+changes shipped on game evidence rather than a measured match; v19 reverted them and
+the rank was back to 17th by the end of that day. The drift to ~54th over 9–10 Sep was
+not our rating falling (it held between 2200 and 2372) but the field growing from 400
+to 465 teams and improving faster than we did.
+
+The last build (v24, the deep book) was active from round 103 and scored **4W 1D 2L**
+in the closing ladder stretch (2225 → 2319) and **7W 4D 2L** in the final Swiss. Three
+of those ladder wins were as Black in the closed structures that had been the worst
+weakness two days earlier. Twenty games is far too few to call that a measured gain —
+it is reported as what happened, not as evidence the book was worth +90 rating.
 
 ## 6. Every build and its measurement
 
